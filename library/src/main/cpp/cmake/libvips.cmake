@@ -7,6 +7,7 @@ ExternalProject_Add(ep_libvips
     DEPENDS ep_libexpat ep_glib ep_highway ep_lcms2 ep_libpng ep_libjpeg-turbo ep_libopenjp2 ep_libwebp ep_libheif ep_libjxl
     CONFIGURE_COMMAND
         ${Meson_EXECUTABLE} setup
+        --reconfigure
         ${EP_MESON_ARGS}
         -Ddeprecated=false
         -Dexamples=false
@@ -16,6 +17,7 @@ ExternalProject_Add(ep_libvips
         -Dfuzzing_engine=none
         -Djpeg-xl-module=disabled
         <BINARY_DIR> <SOURCE_DIR>
-    BUILD_COMMAND ${Meson_EXECUTABLE} compile -C <BINARY_DIR>
+    BUILD_COMMAND ${Meson_EXECUTABLE} compile -j ${NPROC} -C <BINARY_DIR>
     INSTALL_COMMAND ${Meson_EXECUTABLE} install -C <BINARY_DIR>
+    BUILD_ALWAYS 1
 )

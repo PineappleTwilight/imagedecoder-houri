@@ -65,6 +65,7 @@ c_args = ['-I${THIRD_PARTY_LIB_PATH}/include', '-Wno-error=format-nonliteral']
 cpp_args = ['-I${THIRD_PARTY_LIB_PATH}/include', '-Wno-error=format-nonliteral', '-DHAVE_POSIX_MEMALIGN']
 c_link_args = ['-L${THIRD_PARTY_LIB_PATH}/lib']
 cpp_link_args = ['-L${THIRD_PARTY_LIB_PATH}/lib']
+pkg_config_path = ['${THIRD_PARTY_LIB_PATH}/lib/pkgconfig']
 
 [properties]
 cmake_toolchain_file = '${CMAKE_TOOLCHAIN_FILE}'
@@ -81,6 +82,13 @@ CMAKE_FIND_ROOT_PATH_MODE_PACKAGE = 'ONLY'
 # Generate the cross-file
 set(MESON_CROSS_FILE_PATH "${CMAKE_BINARY_DIR}/android-cross-file.txt")
 file(WRITE ${MESON_CROSS_FILE_PATH} "${CROSS_FILE_CONTENT}")
+
+# Detect CPU count for parallel builds
+include(ProcessorCount)
+ProcessorCount(NPROC)
+if(NPROC EQUAL 0)
+    set(NPROC 4)
+endif()
 
 # Common args to all Mason ExternalProjects
 set(EP_MESON_ARGS "--cross-file=${MESON_CROSS_FILE_PATH}"
@@ -109,6 +117,7 @@ set(EP_CMAKE_ARGS
     "-DBUILD_TESTING=OFF"
     "-DCMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER}"
     "-DCMAKE_C_LINKER_LAUNCHER=${CMAKE_C_LINKER_LAUNCHER}"
+    "-DCMAKE_BUILD_PARALLEL_LEVEL=${NPROC}"
 )
 
 set(EP_AUTOTOOLS_ARGS
@@ -133,7 +142,6 @@ include("cmake/libwebp.cmake")
 include("cmake/libjpeg-turbo.cmake")
 include("cmake/libopenjp2.cmake")
 include("cmake/libpng.cmake")
-include("cmake/libspng.cmake")
 include("cmake/libtiff.cmake")
 
 include("cmake/dav1d.cmake")
@@ -156,6 +164,7 @@ ExternalProject_Add(ep_imagedecoder
     INSTALL_COMMAND ""
     SOURCE_DIR ${PROJECT_SOURCE_DIR}/imagedecoder
     DEPENDS ep_libvips
+    BUILD_ALWAYS 1
     CMAKE_ARGS
         ${EP_CMAKE_ARGS}
         "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"

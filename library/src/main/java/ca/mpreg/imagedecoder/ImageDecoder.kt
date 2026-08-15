@@ -20,15 +20,17 @@ class ImageDecoder private constructor(
             loader.startsWith("jpeg") -> "jpeg"
             loader.startsWith("png") -> "png"
             loader.startsWith("webp") -> "webp"
-            loader.startsWith("gif") -> "gif"   // built into libvips, no external dep
+            loader.startsWith("gif") -> "gif"
             loader.startsWith("tiff") -> "tiff"
-            loader.startsWith("heif") -> "heif"  // covers HEIC and AVIF (via libheif)
+            loader.startsWith("heif") -> "heif"
             loader.startsWith("jxl") -> "jxl"
-            loader.startsWith("jp2k") -> "jp2k"  // JPEG 2000 via libopenjp2
+            loader.startsWith("jp2k") -> "jp2"
             else -> loader.removeSuffix("load_buffer").removeSuffix("load")
         }
 
-    class DecodeException private constructor(message: String) : Exception(message)
+    open class DecodeException internal constructor(message: String) : Exception(message)
+
+    class UnknownFormatException internal constructor(message: String) : DecodeException(message)
 
     class DecodeResult private constructor(
         private val ptr: Long,
@@ -78,7 +80,9 @@ class ImageDecoder private constructor(
     external fun encode(suffix: String, page: Int = -1): EncodeResult
 
     protected fun finalize() {
-        free()
+        synchronized(this) {
+            free()
+        }
     }
 
     private external fun free()

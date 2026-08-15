@@ -10,6 +10,6 @@ ExternalProject_Add(ep_libffi
         --disable-builddir
         --disable-multi-os-directory
         --enable-pax_emutramp
-    BUILD_COMMAND ${Make_EXECUTABLE} all
+    BUILD_COMMAND ${Make_EXECUTABLE} -j${NPROC} all
     INSTALL_COMMAND ${Make_EXECUTABLE} install
 )

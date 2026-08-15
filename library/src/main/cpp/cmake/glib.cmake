@@ -9,6 +9,6 @@ ExternalProject_Add(ep_glib
         ${EP_MESON_ARGS}
         -Dtests=false
         <BINARY_DIR> <SOURCE_DIR>
-    BUILD_COMMAND ${Meson_EXECUTABLE} compile -C <BINARY_DIR>
+    BUILD_COMMAND ${Meson_EXECUTABLE} compile -j ${NPROC} -C <BINARY_DIR>
     INSTALL_COMMAND ${Meson_EXECUTABLE} install -C <BINARY_DIR>
 )

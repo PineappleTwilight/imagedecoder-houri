@@ -13,13 +13,18 @@ find_package(PkgConfig REQUIRED)
 
 set(ENV{PKG_CONFIG_PATH} "${CMAKE_INSTALL_PREFIX}/lib/pkgconfig")
 
-pkg_search_module(VIPS REQUIRED vips-cpp)
+pkg_check_modules(VIPS REQUIRED vips-cpp)
 
 list(REMOVE_ITEM VIPS_STATIC_LIBRARIES "c++")
 list(REMOVE_ITEM VIPS_STATIC_LIBRARIES "pthread")
-# list(REMOVE_ITEM VIPS_STATIC_LIBRARIES "spng")
-# list(APPEND VIPS_STATIC_LIBRARIES "spng_static")
 
 target_include_directories(imagedecoder2 PRIVATE ${VIPS_STATIC_INCLUDE_DIRS})
 target_link_directories(imagedecoder2 PRIVATE ${VIPS_STATIC_LIBRARY_DIRS})
-target_link_libraries(imagedecoder2 vips-cpp ${VIPS_STATIC_LIBRARIES} -static-libgcc -static-libstdc++)
+
+target_link_libraries(imagedecoder2
+    vips-cpp
+    ${VIPS_STATIC_LIBRARIES}
+    dav1d
+    -static-libgcc
+    -static-libstdc++
+)
