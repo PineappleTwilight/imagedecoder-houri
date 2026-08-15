@@ -2,7 +2,7 @@ include(ExternalProject)
 
 ExternalProject_Add(ep_libpng
     GIT_REPOSITORY https://github.com/pnggroup/libpng
-    GIT_TAG 6d2054b29e0e07f0def670e2f2683cc9691cbf67
+    GIT_TAG d1d0abeffede1cc898ddc3d0e600839cf026d749
     DEPENDS ep_zlib
     CMAKE_ARGS
         ${EP_CMAKE_ARGS}
