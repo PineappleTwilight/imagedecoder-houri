@@ -82,9 +82,14 @@ Java_ca_mpreg_imagedecoder_ImageDecoder_new(JNIEnv* env, jclass, jobject jstream
 
     auto is_hdr = image.interpretation() == VIPS_INTERPRETATION_scRGB;
 
+    const char* loader_cstr =
+      image.get_typeof("vips-loader") != 0 ? image.get_string("vips-loader") : "";
+    jstring jloader = env->NewStringUTF(loader_cstr ? loader_cstr : "");
+
     jclass cls = env->FindClass("ca/mpreg/imagedecoder/ImageDecoder");
-    jmethodID ctor = env->GetMethodID(cls, "<init>", "(JIIZ)V");
-    return env->NewObject(cls, ctor, reinterpret_cast<jlong>(decoder), decoder->pages, 0, is_hdr);
+    jmethodID ctor = env->GetMethodID(cls, "<init>", "(JIIZLjava/lang/String;)V");
+    return env->NewObject(cls, ctor, reinterpret_cast<jlong>(decoder), decoder->pages, 0, is_hdr,
+                          jloader);
   } catch (const vips::VError& e) {
     delete decoder;
 

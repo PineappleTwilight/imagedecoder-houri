@@ -8,7 +8,26 @@ class ImageDecoder private constructor(
     val pages: Int,
     var page: Int,
     val isHdr: Boolean,
+    private val loader: String,
 ) {
+    /**
+     * Normalized image format derived from the libvips loader name.
+     *
+     * Enabled formats: jpeg, png, webp, gif, tiff, heif (includes avif/heic), jxl, jp2k.
+     */
+    val format: String
+        get() = when {
+            loader.startsWith("jpeg") -> "jpeg"
+            loader.startsWith("png") -> "png"
+            loader.startsWith("webp") -> "webp"
+            loader.startsWith("gif") -> "gif"   // built into libvips, no external dep
+            loader.startsWith("tiff") -> "tiff"
+            loader.startsWith("heif") -> "heif"  // covers HEIC and AVIF (via libheif)
+            loader.startsWith("jxl") -> "jxl"
+            loader.startsWith("jp2k") -> "jp2k"  // JPEG 2000 via libopenjp2
+            else -> loader.removeSuffix("load_buffer").removeSuffix("load")
+        }
+
     class DecodeException private constructor(message: String) : Exception(message)
 
     class DecodeResult private constructor(
@@ -40,9 +59,7 @@ class ImageDecoder private constructor(
     @Synchronized
     @Throws(DecodeException::class)
     external fun decode(
-        page: Int = 0,
-        crop: Boolean = false,
-        getTrim: Boolean = false
+        page: Int = 0, crop: Boolean = false, getTrim: Boolean = false
     ): DecodeResult
 
     class EncodeResult private constructor(
