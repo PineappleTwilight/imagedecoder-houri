@@ -33,7 +33,6 @@ class ImageDecoder private constructor(
     class UnknownFormatException internal constructor(message: String) : DecodeException(message)
 
     class DecodeResult private constructor(
-        private val ptr: Long,
         val image: ByteBuffer,
         val width: Int,
         val height: Int,
@@ -42,13 +41,7 @@ class ImageDecoder private constructor(
         val trim_top: Int,
         val trim_width: Int,
         val trim_height: Int,
-    ) {
-        protected fun finalize() {
-            free()
-        }
-
-        private external fun free()
-    }
+    )
 
     @Synchronized
     @Throws(DecodeException::class)

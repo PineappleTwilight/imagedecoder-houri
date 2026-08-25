@@ -236,10 +236,16 @@ Java_ca_mpreg_imagedecoder_ImageDecoder_decode(JNIEnv* env, jobject obj, jint pa
       trim_height = 0;
     }
 
-    size_t size;
-    void* data = frame.write_to_memory(&size);
+    size_t size = VIPS_IMAGE_SIZEOF_IMAGE(frame.get_image());
 
-    if (!data) {
+    jclass bufferCls = env->FindClass("java/nio/ByteBuffer");
+    jmethodID allocateDirect =
+      env->GetStaticMethodID(bufferCls, "allocateDirect", "(I)Ljava/nio/ByteBuffer;");
+
+    jobject byteBuffer = size <= (size_t)G_MAXINT
+                           ? env->CallStaticObjectMethod(bufferCls, allocateDirect, (jint)size)
+                           : nullptr;
+    if (!byteBuffer || env->ExceptionCheck()) {
       if (env->ExceptionCheck())
         env->ExceptionClear();
       env->ThrowNew(env->FindClass("ca/mpreg/imagedecoder/ImageDecoder$DecodeException"),
@@ -247,9 +253,8 @@ Java_ca_mpreg_imagedecoder_ImageDecoder_decode(JNIEnv* env, jobject obj, jint pa
       return nullptr;
     }
 
-    jobject byteBuffer = env->NewDirectByteBuffer(data, size);
-    if (!byteBuffer) {
-      g_free(data);
+    void* data = env->GetDirectBufferAddress(byteBuffer);
+    if (!data) {
       if (env->ExceptionCheck())
         env->ExceptionClear();
       env->ThrowNew(env->FindClass("ca/mpreg/imagedecoder/ImageDecoder$DecodeException"),
@@ -257,23 +262,17 @@ Java_ca_mpreg_imagedecoder_ImageDecoder_decode(JNIEnv* env, jobject obj, jint pa
       return nullptr;
     }
 
+    frame.write(vips::VImage::new_from_memory(data, size, frame.width(), frame.height(),
+                                              frame.bands(), frame.format()));
+
     jclass cls = env->FindClass("ca/mpreg/imagedecoder/ImageDecoder$DecodeResult");
-    jmethodID ctor = env->GetMethodID(cls, "<init>", "(JLjava/nio/ByteBuffer;IIIIIII)V");
-    return env->NewObject(cls, ctor, (jlong)(intptr_t)data, byteBuffer, width, height, duration,
-                          trim_left, trim_top, trim_width, trim_height);
+    jmethodID ctor = env->GetMethodID(cls, "<init>", "(Ljava/nio/ByteBuffer;IIIIIII)V");
+    return env->NewObject(cls, ctor, byteBuffer, width, height, duration, trim_left, trim_top,
+                          trim_width, trim_height);
   } catch (const vips::VError& e) {
     throw_vips_error(env, e);
     return nullptr;
   }
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_ca_mpreg_imagedecoder_ImageDecoder_00024DecodeResult_free(JNIEnv* env, jobject obj)
-{
-  jlong ptr = take_ptr(env, obj);
-  if (ptr == 0)
-    return;
-  g_free((void*)(intptr_t)ptr);
 }
 
 extern "C" JNIEXPORT jobject JNICALL
