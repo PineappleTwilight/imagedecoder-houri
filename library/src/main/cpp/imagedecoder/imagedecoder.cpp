@@ -22,8 +22,10 @@ throw_vips_error(JNIEnv* env, const vips::VError& e)
 jint
 JNI_OnLoad(JavaVM* vm, void*)
 {
-  VIPS_INIT("VipsDecoder");
+  if (VIPS_INIT("VipsDecoder"))
+    return JNI_ERR;
   vips_concurrency_set(1);
+  vips_cache_set_max(0);
 
   JNIEnv* env;
   if (vm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK)
@@ -77,14 +79,32 @@ decoder_free(Decoder* d)
   g_free(d);
 }
 
+static constexpr size_t kMaxImageBytes = 80 * 1024 * 1024;
+
 static uint8_t*
 read_all(JNIEnv* env, jobject jstream, size_t* out_size)
 {
   jclass cls = env->GetObjectClass(jstream);
+  if (cls == nullptr) {
+    *out_size = 0;
+    return nullptr;
+  }
   jmethodID readMethod = env->GetMethodID(cls, "read", "([B)I");
+  if (readMethod == nullptr) {
+    *out_size = 0;
+    return nullptr;
+  }
 
   jbyteArray buf = env->NewByteArray(8192);
+  if (buf == nullptr) {
+    *out_size = 0;
+    return nullptr;
+  }
   GByteArray* result = g_byte_array_new();
+  if (result == nullptr) {
+    *out_size = 0;
+    return nullptr;
+  }
 
   while (true) {
     jint n = env->CallIntMethod(jstream, readMethod, buf);
@@ -97,6 +117,13 @@ read_all(JNIEnv* env, jobject jstream, size_t* out_size)
     if (n <= 0) {
       break;
     }
+    if (result->len + static_cast<size_t>(n) > kMaxImageBytes) {
+      g_byte_array_free(result, TRUE);
+      *out_size = 0;
+      jclass ex = env->FindClass("ca/mpreg/imagedecoder/ImageDecoder$DecodeException");
+      if (ex != nullptr) env->ThrowNew(ex, "Image too large (>80MB)");
+      return nullptr;
+    }
     jbyte* bytes = env->GetByteArrayElements(buf, nullptr);
     if (bytes == nullptr)
       break;
@@ -105,7 +132,7 @@ read_all(JNIEnv* env, jobject jstream, size_t* out_size)
   }
 
   *out_size = result->len;
-  uint8_t* data = g_byte_array_free(result, FALSE); // transfers ownership
+  uint8_t* data = g_byte_array_free(result, FALSE);
   return data;
 }
 
@@ -170,7 +197,16 @@ Java_ca_mpreg_imagedecoder_ImageDecoder_new(JNIEnv* env, jclass, jobject jstream
 extern "C" JNIEXPORT void JNICALL
 Java_ca_mpreg_imagedecoder_ImageDecoder_free(JNIEnv* env, jobject obj)
 {
-  jlong ptr = get_ptr(env, obj);
+  jlong ptr = take_ptr(env, obj);
+  if (ptr == 0) return;
+  Decoder* decoder = reinterpret_cast<Decoder*>(ptr);
+  decoder_free(decoder);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_ca_mpreg_imagedecoder_ImageDecoder_nativeFree(JNIEnv* env, jclass, jlong ptr)
+{
+  if (ptr == 0) return;
   Decoder* decoder = reinterpret_cast<Decoder*>(ptr);
   decoder_free(decoder);
 }
@@ -220,16 +256,31 @@ Java_ca_mpreg_imagedecoder_ImageDecoder_decode(JNIEnv* env, jobject obj, jint pa
         frame.find_trim(&trim_top_b, &trim_width_b, &trim_height_b,
                         vips::VImage::option()->set("line_art", true)->set("background", 0.0));
 
-      trim_left = std::max(trim_left_w, trim_left_b);
-      trim_top = std::max(trim_top_w, trim_top_b);
-      trim_width = std::min(trim_width_w, trim_width_b);
-      trim_height = std::min(trim_height_w, trim_height_b);
+      // find_trim can return width/height <=0 on solid-color images; guard against zero crop
+      if (trim_width_w <= 0 || trim_height_w <= 0 || trim_width_b <= 0 || trim_height_b <= 0) {
+        trim_left = 0;
+        trim_top = 0;
+        trim_width = width;
+        trim_height = height;
+      } else {
+        trim_left = std::max(trim_left_w, trim_left_b);
+        trim_top = std::max(trim_top_w, trim_top_b);
+        trim_width = std::min(trim_width_w, trim_width_b);
+        trim_height = std::min(trim_height_w, trim_height_b);
+        trim_width = std::max(1, std::min(trim_width, width - trim_left));
+        trim_height = std::max(1, std::min(trim_height, height - trim_top));
+      }
     }
 
     if (crop) {
-      frame = frame.crop(trim_left, trim_top, trim_width, trim_height);
-      width = trim_width;
-      height = trim_height;
+      if (trim_width <= 0 || trim_height <= 0 || trim_left < 0 || trim_top < 0 ||
+          trim_left + trim_width > width || trim_top + trim_height > height) {
+        // Invalid trim would produce zero crop — return full frame instead
+      } else {
+        frame = frame.crop(trim_left, trim_top, trim_width, trim_height);
+        width = trim_width;
+        height = trim_height;
+      }
       trim_left = 0;
       trim_top = 0;
       trim_width = 0;

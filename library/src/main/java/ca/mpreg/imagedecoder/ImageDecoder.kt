@@ -1,7 +1,10 @@
 package ca.mpreg.imagedecoder
 
+import java.io.Closeable
 import java.io.InputStream
+import java.lang.ref.Cleaner
 import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicLong
 
 class ImageDecoder private constructor(
     private val ptr: Long,
@@ -9,7 +12,7 @@ class ImageDecoder private constructor(
     var page: Int,
     val isHdr: Boolean,
     private val loader: String,
-) {
+) : Closeable {
     /**
      * Normalized image format derived from the libvips loader name.
      *
@@ -28,7 +31,7 @@ class ImageDecoder private constructor(
             else -> loader.removeSuffix("load_buffer").removeSuffix("load")
         }
 
-    open class DecodeException internal constructor(message: String) : Exception(message)
+    open class DecodeException internal constructor(message: String, cause: Throwable? = null) : Exception(message, cause)
 
     class UnknownFormatException internal constructor(message: String) : DecodeException(message)
 
@@ -60,9 +63,21 @@ class ImageDecoder private constructor(
     class EncodeResult private constructor(
         private val ptr: Long,
         val bytes: ByteBuffer,
-    ) {
+    ) : Closeable {
+        @Volatile private var freed = false
+
+        @Synchronized
+        fun closeAndFree() {
+            if (!freed) {
+                freed = true
+                try { free() } catch (_: Exception) {}
+            }
+        }
+
+        override fun close() = closeAndFree()
+
         protected fun finalize() {
-            free()
+            closeAndFree()
         }
 
         private external fun free()
@@ -72,15 +87,40 @@ class ImageDecoder private constructor(
     @Throws(DecodeException::class)
     external fun encode(suffix: String, page: Int = -1): EncodeResult
 
-    protected fun finalize() {
-        synchronized(this) {
-            free()
+    private val closePtr = AtomicLong(ptr)
+    private val cleanable: Cleaner.Cleanable?
+
+    init {
+        val p = ptr
+        cleanable = cleaner.register(this) {
+            val v = closePtr.getAndSet(0L)
+            if (v != 0L) {
+                try { nativeFree(v) } catch (_: Exception) {}
+            }
         }
+    }
+
+    @Synchronized
+    override fun close() {
+        val v = closePtr.getAndSet(0L)
+        if (v != 0L) {
+            try { free() } catch (_: Exception) {}
+            try { cleanable?.clean() } catch (_: Exception) {}
+        }
+    }
+
+    protected fun finalize() {
+        close()
     }
 
     private external fun free()
 
     companion object {
+        private val cleaner: Cleaner = Cleaner.create()
+
+        @JvmStatic
+        private external fun nativeFree(ptr: Long)
+
         init {
             System.loadLibrary("imagedecoder2")
         }
@@ -88,5 +128,22 @@ class ImageDecoder private constructor(
         @JvmStatic
         @Throws(DecodeException::class)
         external fun new(inputStream: InputStream): ImageDecoder
+
+        @JvmStatic
+        @Throws(DecodeException::class)
+        fun fromBytes(bytes: ByteArray): ImageDecoder = new(bytes.inputStream())
+
+        @JvmStatic
+        fun isSupportedFormat(loader: String): Boolean = when {
+            loader.startsWith("jpeg") -> true
+            loader.startsWith("png") -> true
+            loader.startsWith("webp") -> true
+            loader.startsWith("gif") -> true
+            loader.startsWith("tiff") -> true
+            loader.startsWith("heif") -> true
+            loader.startsWith("jxl") -> true
+            loader.startsWith("jp2k") -> true
+            else -> false
+        }
     }
 }
