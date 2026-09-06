@@ -217,6 +217,16 @@ Java_ca_mpreg_imagedecoder_ImageDecoder_decode(JNIEnv* env, jobject obj, jint pa
 {
   jlong ptr = get_ptr(env, obj);
   Decoder* decoder = reinterpret_cast<Decoder*>(ptr);
+  if (decoder == nullptr || decoder->buffer == nullptr) {
+    jclass ex = env->FindClass("ca/mpreg/imagedecoder/ImageDecoder$DecodeException");
+    if (ex != nullptr) env->ThrowNew(ex, "Decoder already closed");
+    return nullptr;
+  }
+  if (page < 0 || page >= decoder->pages) {
+    jclass ex = env->FindClass("ca/mpreg/imagedecoder/ImageDecoder$DecodeException");
+    if (ex != nullptr) env->ThrowNew(ex, "Page index out of range");
+    return nullptr;
+  }
 
   try {
     vips::VImage frame = vips::VImage::new_from_buffer(
@@ -236,6 +246,11 @@ Java_ca_mpreg_imagedecoder_ImageDecoder_decode(JNIEnv* env, jobject obj, jint pa
 
     int width = frame.width();
     int height = frame.height();
+    if (width <= 0 || height <= 0 || width > 16384 || height > 16384) {
+      jclass ex = env->FindClass("ca/mpreg/imagedecoder/ImageDecoder$DecodeException");
+      if (ex != nullptr) env->ThrowNew(ex, "Decoded dimensions out of range");
+      return nullptr;
+    }
 
     int duration = 0;
     if (decoder->pages > 0 && page < decoder->durations_count)
