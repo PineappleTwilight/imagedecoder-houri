@@ -507,6 +507,9 @@ set(EP_AUTOTOOLS_ARGS
     "--enable-static"
     "--with-pic"
 )
+# Space-separated version for use inside bash -c " ... ${EP_AUTOTOOLS_ARGS_STR} ..."
+# (CMake lists are ; separated, but inside a bash string they need to be space separated)
+string(REPLACE ";" " " EP_AUTOTOOLS_ARGS_STR "${EP_AUTOTOOLS_ARGS}")
 
 include("cmake/zlib.cmake")
 include("cmake/lcms2.cmake")
