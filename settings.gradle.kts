@@ -22,6 +22,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "imagedecoder"
+rootProject.name = "imagedecoder-root"
 include(":sample")
-include(":library")
+include(":imagedecoder")
+project(":imagedecoder").projectDir = file("library")
