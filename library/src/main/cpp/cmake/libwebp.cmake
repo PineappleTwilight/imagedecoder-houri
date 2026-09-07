@@ -3,6 +3,7 @@ include(ExternalProject)
 ExternalProject_Add(ep_libwebp
     GIT_REPOSITORY https://chromium.googlesource.com/webm/libwebp
     GIT_TAG 1.6.0
+    GIT_SHALLOW TRUE
     CMAKE_ARGS
         ${EP_CMAKE_ARGS}
         -DWEBP_LINK_STATIC=ON

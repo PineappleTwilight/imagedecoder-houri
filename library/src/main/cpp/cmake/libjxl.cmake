@@ -3,6 +3,7 @@ include(ExternalProject)
 ExternalProject_Add(ep_libjxl
     GIT_REPOSITORY https://github.com/libjxl/libjxl
     GIT_TAG v0.12.0
+    GIT_SHALLOW TRUE
     DEPENDS ep_lcms2 ep_brotli ep_highway
     CMAKE_ARGS
         ${EP_CMAKE_ARGS}

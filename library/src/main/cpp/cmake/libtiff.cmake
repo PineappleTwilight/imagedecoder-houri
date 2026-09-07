@@ -3,6 +3,7 @@ include(ExternalProject)
 ExternalProject_Add(ep_libtiff
     GIT_REPOSITORY https://github.com/libsdl-org/libtiff
     GIT_TAG v4.7.2
+    GIT_SHALLOW TRUE
     CMAKE_ARGS
         ${EP_CMAKE_ARGS}
         -Djpeg=ON

@@ -3,6 +3,7 @@ include(ExternalProject)
 ExternalProject_Add(ep_highway
     GIT_REPOSITORY https://github.com/google/highway
     GIT_TAG 1.4.0
+    GIT_SHALLOW TRUE
     CMAKE_ARGS
         ${EP_CMAKE_ARGS}
         -DHWY_ENABLE_CONTRIB=OFF

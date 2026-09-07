@@ -3,9 +3,11 @@ include(ExternalProject)
 ExternalProject_Add(ep_libvips
     GIT_REPOSITORY https://github.com/libvips/libvips
     GIT_TAG v8.18.5
+    GIT_SHALLOW TRUE
     PATCH_COMMAND git apply ${CMAKE_CURRENT_SOURCE_DIR}/patches/libvips-remove-subdirs.patch || true
     DEPENDS ep_libexpat ep_glib ep_highway ep_lcms2 ep_libpng ep_libjpeg-turbo ep_libopenjp2 ep_libwebp ep_libheif ep_libjxl
     CONFIGURE_COMMAND
+        ${CMAKE_COMMAND} -E env "MSYS_NO_PATHCONV=1"
         ${Meson_EXECUTABLE} setup
         --reconfigure
         ${EP_MESON_ARGS}
