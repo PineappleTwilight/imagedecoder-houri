@@ -21,29 +21,38 @@ find_program(Meson_EXECUTABLE
 if(NOT Meson_EXECUTABLE)
     message(FATAL_ERROR "Meson is required (tried PATH and C:/Program Files/Meson/meson.exe; add Meson to PATH or set -DMeson_EXECUTABLE=...)")
 endif()
-# Autotools `configure` scripts need bash; prefer Git for Windows bash on Windows
-# over WSL's C:\Windows\System32\bash.exe (which expects /mnt/c/... paths).
-if(WIN32)
-    if(EXISTS "C:/Program Files/Git/usr/bin/bash.exe")
-        set(BASH_EXECUTABLE "C:/Program Files/Git/usr/bin/bash.exe" CACHE FILEPATH "Git Bash" FORCE)
-    elseif(EXISTS "C:/Program Files/Git/bin/bash.exe")
-        set(BASH_EXECUTABLE "C:/Program Files/Git/bin/bash.exe" CACHE FILEPATH "Git Bash" FORCE)
-    else()
-        find_program(BASH_EXECUTABLE bash
-            HINTS
-                "C:/Program Files/Git/usr/bin"
-                "C:/Program Files/Git/bin"
-                "C:/msys64/usr/bin"
-                "C:/msys64/bin"
-                "C:/tools/msys64/usr/bin"
-            NO_DEFAULT_PATH
-        )
-        if(NOT BASH_EXECUTABLE)
-            find_program(BASH_EXECUTABLE bash)
+# Autotools `configure` scripts need bash; prefer MSYS2 bash on Windows
+# over Git Bash and WSL's C:\Windows\System32\bash.exe (which expects /mnt/c/... paths).
+# Gradle may already pass -DBASH_EXECUTABLE="C:/msys64/usr/bin/bash.exe" (see library/build.gradle.kts).
+if(NOT BASH_EXECUTABLE)
+    if(WIN32)
+        if(EXISTS "C:/msys64/usr/bin/bash.exe")
+            set(BASH_EXECUTABLE "C:/msys64/usr/bin/bash.exe" CACHE FILEPATH "MSYS2 Bash")
+        elseif(EXISTS "C:/tools/msys64/usr/bin/bash.exe")
+            set(BASH_EXECUTABLE "C:/tools/msys64/usr/bin/bash.exe" CACHE FILEPATH "MSYS2 Bash")
+        elseif(EXISTS "C:/msys64/bin/bash.exe")
+            set(BASH_EXECUTABLE "C:/msys64/bin/bash.exe" CACHE FILEPATH "MSYS2 Bash")
+        elseif(EXISTS "C:/Program Files/Git/usr/bin/bash.exe")
+            set(BASH_EXECUTABLE "C:/Program Files/Git/usr/bin/bash.exe" CACHE FILEPATH "Git Bash")
+        elseif(EXISTS "C:/Program Files/Git/bin/bash.exe")
+            set(BASH_EXECUTABLE "C:/Program Files/Git/bin/bash.exe" CACHE FILEPATH "Git Bash")
+        else()
+            find_program(BASH_EXECUTABLE bash
+                HINTS
+                    "C:/msys64/usr/bin"
+                    "C:/msys64/bin"
+                    "C:/tools/msys64/usr/bin"
+                    "C:/Program Files/Git/usr/bin"
+                    "C:/Program Files/Git/bin"
+                NO_DEFAULT_PATH
+            )
+            if(NOT BASH_EXECUTABLE)
+                find_program(BASH_EXECUTABLE bash)
+            endif()
         endif()
+    else()
+        find_program(BASH_EXECUTABLE bash)
     endif()
-else()
-    find_program(BASH_EXECUTABLE bash)
 endif()
 if(NOT BASH_EXECUTABLE)
     set(BASH_EXECUTABLE "bash")

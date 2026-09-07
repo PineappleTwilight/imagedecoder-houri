@@ -26,6 +26,40 @@ android {
             cmake {
                 cppFlags("-O3 -flto")
                 targets("ep_imagedecoder")
+                // Force MSYS2 Bash on Windows before Git Bash / WSL bash (MSYS has autoreconf etc.)
+                // Use forward slashes; CMake will handle the space in "Program Files".
+                if (System.getProperty("os.name").contains("Windows", ignoreCase = true)) {
+                    val msysBash = File("C:/msys64/usr/bin/bash.exe")
+                    val msysBash2 = File("C:/tools/msys64/usr/bin/bash.exe")
+                    val msysBash3 = File("C:/msys64/bin/bash.exe")
+                    val gitBash = File("C:/Program Files/Git/usr/bin/bash.exe")
+                    val gitBashAlt = File("C:/Program Files/Git/bin/bash.exe")
+                    val bashPath = when {
+                        msysBash.exists() -> msysBash.absolutePath
+                        msysBash2.exists() -> msysBash2.absolutePath
+                        msysBash3.exists() -> msysBash3.absolutePath
+                        gitBash.exists() -> gitBash.absolutePath
+                        gitBashAlt.exists() -> gitBashAlt.absolutePath
+                        else -> null
+                    }
+                    if (bashPath != null) {
+                        arguments += "-DBASH_EXECUTABLE=${bashPath.replace('\\', '/')}"
+                    }
+                    val mesonBash = File("C:/Program Files/Meson/meson.exe")
+                    if (mesonBash.exists()) {
+                        arguments += "-DMeson_EXECUTABLE=${mesonBash.absolutePath.replace('\\', '/')}"
+                    }
+                    val ninjaFromMeson = File("C:/Program Files/Meson/ninja.exe")
+                    val ninjaFromSdk = File(System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT") ?: "", "cmake/3.22.1/bin/ninja.exe")
+                    val ninjaPath = when {
+                        ninjaFromSdk.exists() -> ninjaFromSdk.absolutePath
+                        ninjaFromMeson.exists() -> ninjaFromMeson.absolutePath
+                        else -> null
+                    }
+                    if (ninjaPath != null) {
+                        arguments += "-DNinja_EXECUTABLE=${ninjaPath.replace('\\', '/')}"
+                    }
+                }
             }
         }
     }
