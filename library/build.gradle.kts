@@ -45,6 +45,24 @@ android {
                     if (bashPath != null) {
                         arguments += "-DBASH_EXECUTABLE=${bashPath.replace('\\', '/')}"
                     }
+                    // Make is required for autotools (libiconv/lcms2/libffi); chocolatey make
+                    // breaks MSYS /c/... paths, so force MSYS2 make when on Windows.
+                    val msysMake = File("C:/msys64/usr/bin/make.exe")
+                    val msysMake2 = File("C:/msys64/bin/make.exe")
+                    val msysMake3 = File("C:/tools/msys64/usr/bin/make.exe")
+                    val msysMake4 = File("C:/msys64/mingw64/bin/make.exe")
+                    val msysMake5 = File("C:/msys64/mingw64/bin/mingw32-make.exe")
+                    val makePath = when {
+                        msysMake.exists() -> msysMake.absolutePath
+                        msysMake2.exists() -> msysMake2.absolutePath
+                        msysMake3.exists() -> msysMake3.absolutePath
+                        msysMake4.exists() -> msysMake4.absolutePath
+                        msysMake5.exists() -> msysMake5.absolutePath
+                        else -> null
+                    }
+                    if (makePath != null) {
+                        arguments += "-DMake_EXECUTABLE=${makePath.replace('\\', '/')}"
+                    }
                     val mesonBash = File("C:/Program Files/Meson/meson.exe")
                     if (mesonBash.exists()) {
                         arguments += "-DMeson_EXECUTABLE=${mesonBash.absolutePath.replace('\\', '/')}"

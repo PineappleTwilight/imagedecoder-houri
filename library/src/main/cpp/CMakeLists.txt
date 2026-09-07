@@ -40,8 +40,9 @@ endfunction()
 # Tool detection: Make
 # ---------------------------------------------------------------------------
 # Prefer MSYS2 make on Windows over MinGW or other makes that mis-handle
-# MSYS paths. Search MSYS locations first when WIN32.
-if(WIN32)
+# MSYS paths. Search MSYS locations first when WIN32. If Make_EXECUTABLE
+# was already passed via -D (e.g., from build.gradle.kts), keep it.
+if(WIN32 AND NOT Make_EXECUTABLE)
     # Strictly require MSYS2 make on Windows. Chocolatey/MinGW make cannot
     # handle MSYS Unix paths (/c/...) and breaks autotools (C:/ vs /c/).
     # Check all known MSYS2 locations (msys, mingw64, ucrt64, clang64).
