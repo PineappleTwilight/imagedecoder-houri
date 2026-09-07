@@ -1,9 +1,8 @@
 include(ExternalProject)
 
 ExternalProject_Add(ep_libpng
-    GIT_REPOSITORY https://github.com/pnggroup/libpng
-    GIT_TAG d1d0abeffede1cc898ddc3d0e600839cf026d749
-    GIT_SHALLOW TRUE
+    URL https://github.com/glennrp/libpng/archive/d1d0abeffede1cc898ddc3d0e600839cf026d749.tar.gz
+    URL_HASH SHA256=ea59a944375f93e8565b4642d6dac2f194c1306e2407409b4d0951ce610c822a
     DEPENDS ep_zlib
     CMAKE_ARGS
         ${EP_CMAKE_ARGS}
