@@ -511,6 +511,21 @@ set(EP_AUTOTOOLS_ARGS
 # (CMake lists are ; separated, but inside a bash string they need to be space separated)
 string(REPLACE ";" " " EP_AUTOTOOLS_ARGS_STR "${EP_AUTOTOOLS_ARGS}")
 
+# ---------------------------------------------------------------------------
+# Autotools helper scripts (Windows MSYS cygpath handling)
+# Avoids bash -c quoting issues: ; splits CMake list, " breaks stamp file.
+# Helpers take <SOURCE_DIR> as $1, cygpath-convert it, cd there, then exec.
+# ---------------------------------------------------------------------------
+set(AUTOTOOLS_HELPER "${CMAKE_BINARY_DIR}/autotools_helper.sh")
+file(WRITE "${AUTOTOOLS_HELPER}" "#!/usr/bin/env bash\nset -e\nsrc=\"$1\"\nshift\nif command -v cygpath >/dev/null 2>&1; then\n  src=$(cygpath -u \"$src\")\nfi\ncd \"$src\"\nexec \"$@\"\n")
+execute_process(COMMAND ${CMAKE_COMMAND} -E chmod +x "${AUTOTOOLS_HELPER}")
+set(AUTOTOOLS_HELPER_AUTOGEN "${CMAKE_BINARY_DIR}/autotools_helper_autogen.sh")
+file(WRITE "${AUTOTOOLS_HELPER_AUTOGEN}" "#!/usr/bin/env bash\nset -e\nsrc=\"$1\"\nshift\nif command -v cygpath >/dev/null 2>&1; then\n  src=$(cygpath -u \"$src\")\nfi\ncd \"$src\"\nexec ./autogen.sh \"$@\"\n")
+execute_process(COMMAND ${CMAKE_COMMAND} -E chmod +x "${AUTOTOOLS_HELPER_AUTOGEN}")
+set(AUTOTOOLS_HELPER_AUTOGEN_CONFIGURE "${CMAKE_BINARY_DIR}/autotools_helper_autogen_configure.sh")
+file(WRITE "${AUTOTOOLS_HELPER_AUTOGEN_CONFIGURE}" "#!/usr/bin/env bash\nset -e\nsrc=\"$1\"\nshift\nif command -v cygpath >/dev/null 2>&1; then\n  src=$(cygpath -u \"$src\")\nfi\ncd \"$src\"\n./autogen.sh\nexec ./configure \"$@\"\n")
+execute_process(COMMAND ${CMAKE_COMMAND} -E chmod +x "${AUTOTOOLS_HELPER_AUTOGEN_CONFIGURE}")
+
 include("cmake/zlib.cmake")
 include("cmake/lcms2.cmake")
 
