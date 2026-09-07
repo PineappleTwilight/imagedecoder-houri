@@ -190,22 +190,57 @@ if(Ninja_EXECUTABLE)
     list(APPEND EP_CMAKE_ARGS "-DCMAKE_MAKE_PROGRAM=${Ninja_EXECUTABLE}")
 endif()
 
-set(EP_AUTOTOOLS_ARGS
-    "--host=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
-    "CC=${CMAKE_C_COMPILER}"
-    "CFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
-    "CXX=${CMAKE_CXX_COMPILER}"
-    "CXXFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
-    "AR=${CMAKE_AR}"
-    "AS=${CMAKE_ASM_COMPILER}"
-    "LD=${CMAKE_LINKER}"
-    "RANLIB=${CMAKE_RANLIB}"
-    "STRIP=${CMAKE_STRIP}"
-    "--prefix=${THIRD_PARTY_LIB_PATH}"
-    "--disable-shared"
-    "--enable-static"
-    "--with-pic"
-)
+if(WIN32)
+    # MSYS2 bash expects Unix-style /c/... for absolute paths with drive letters,
+    # otherwise `CC=C:/...` is parsed as variable `C` with value `:/...` and next arg `0` from `C:` split.
+    file(TO_CMAKE_PATH "${CMAKE_C_COMPILER}" _cc_tmp)
+    string(REGEX REPLACE "^C:/" "/c/" _cc_msys "${_cc_tmp}")
+    file(TO_CMAKE_PATH "${CMAKE_CXX_COMPILER}" _cxx_tmp)
+    string(REGEX REPLACE "^C:/" "/c/" _cxx_msys "${_cxx_tmp}")
+    file(TO_CMAKE_PATH "${CMAKE_AR}" _ar_tmp)
+    string(REGEX REPLACE "^C:/" "/c/" _ar_msys "${_ar_tmp}")
+    file(TO_CMAKE_PATH "${CMAKE_LINKER}" _ld_tmp)
+    string(REGEX REPLACE "^C:/" "/c/" _ld_msys "${_ld_tmp}")
+    file(TO_CMAKE_PATH "${CMAKE_RANLIB}" _ranlib_tmp)
+    string(REGEX REPLACE "^C:/" "/c/" _ranlib_msys "${_ranlib_tmp}")
+    file(TO_CMAKE_PATH "${CMAKE_STRIP}" _strip_tmp)
+    string(REGEX REPLACE "^C:/" "/c/" _strip_msys "${_strip_tmp}")
+    file(TO_CMAKE_PATH "${THIRD_PARTY_LIB_PATH}" _prefix_msys)
+    string(REGEX REPLACE "^C:/" "/c/" _prefix_msys "${_prefix_msys}")
+    set(EP_AUTOTOOLS_ARGS
+        "--host=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
+        "CC=${_cc_msys}"
+        "CFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
+        "CXX=${_cxx_msys}"
+        "CXXFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
+        "AR=${_ar_msys}"
+        "AS="
+        "LD=${_ld_msys}"
+        "RANLIB=${_ranlib_msys}"
+        "STRIP=${_strip_msys}"
+        "--prefix=${_prefix_msys}"
+        "--disable-shared"
+        "--enable-static"
+        "--with-pic"
+    )
+else()
+    set(EP_AUTOTOOLS_ARGS
+        "--host=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
+        "CC=${CMAKE_C_COMPILER}"
+        "CFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
+        "CXX=${CMAKE_CXX_COMPILER}"
+        "CXXFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
+        "AR=${CMAKE_AR}"
+        "AS=${CMAKE_ASM_COMPILER}"
+        "LD=${CMAKE_LINKER}"
+        "RANLIB=${CMAKE_RANLIB}"
+        "STRIP=${CMAKE_STRIP}"
+        "--prefix=${THIRD_PARTY_LIB_PATH}"
+        "--disable-shared"
+        "--enable-static"
+        "--with-pic"
+    )
+endif()
 
 include("cmake/zlib.cmake")
 include("cmake/lcms2.cmake")
