@@ -12,6 +12,6 @@ ExternalProject_Add(ep_libiconv
     CONFIGURE_COMMAND
         "${BASH_EXECUTABLE}" -c
         "set -ex; echo "libiconv: BASH=/bin/bash, src=<SOURCE_DIR>"; if command -v cygpath >/dev/null 2>&1; then src=$(cygpath -u \"<SOURCE_DIR>\"); else src=\"<SOURCE_DIR>\"; fi; cd \"$src\" && ./configure ${EP_AUTOTOOLS_ARGS_STR} --enable-extra-encodings"
-    BUILD_COMMAND ${Make_EXECUTABLE} -j${NPROC}
-    INSTALL_COMMAND ${Make_EXECUTABLE} -j${NPROC} install
+    BUILD_COMMAND ${Make_EXECUTABLE} -j${NPROC} V=1
+    INSTALL_COMMAND ${Make_EXECUTABLE} -j${NPROC} install V=1
 )
