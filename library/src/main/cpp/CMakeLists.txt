@@ -45,16 +45,15 @@ endif()
 set(AUTOTOOLS_BASH_PREFIX "${BASH_EXECUTABLE}")
 find_program(Ninja_EXECUTABLE NAMES ninja ninja.exe
     HINTS
-        "C:/Program Files/Meson"
-        "$ENV{ProgramFiles}/Meson"
         "$ENV{ANDROID_HOME}/cmake/3.22.1/bin"
         "$ENV{ANDROID_SDK_ROOT}/cmake/3.22.1/bin"
+        "C:/Program Files/Meson"
+        "$ENV{ProgramFiles}/Meson"
         "C:/Program Files/Ninja"
-        "$ENV{ProgramFiles}/Ninja"
 )
-if(Ninja_EXECUTABLE AND WIN32)
-    file(TO_NATIVE_PATH "${Ninja_EXECUTABLE}" _ninja_native)
-    set(Ninja_EXECUTABLE "${_ninja_native}")
+# Keep forward slashes for -DCMAKE_MAKE_PROGRAM to avoid space splitting on Windows
+if(Ninja_EXECUTABLE)
+    file(TO_CMAKE_PATH "${Ninja_EXECUTABLE}" Ninja_EXECUTABLE)
 endif()
 
 set(THIRD_PARTY_LIB_PATH ${CMAKE_BINARY_DIR}/fakeroot)
