@@ -44,36 +44,59 @@ endfunction()
 if(WIN32)
     # Strictly require MSYS2 make on Windows. Chocolatey/MinGW make cannot
     # handle MSYS Unix paths (/c/...) and breaks autotools (C:/ vs /c/).
-    # Use direct EXISTS checks (more reliable than find_program with HINTS
-    # when CMAKE_FIND_ROOT_PATH is set for cross-compilation).
-    if(EXISTS "C:/msys64/usr/bin/make.exe")
-        set(Make_EXECUTABLE "C:/msys64/usr/bin/make.exe" CACHE FILEPATH "MSYS2 Make" FORCE)
-    elseif(EXISTS "C:/msys64/bin/make.exe")
-        set(Make_EXECUTABLE "C:/msys64/bin/make.exe" CACHE FILEPATH "MSYS2 Make" FORCE)
-    elseif(EXISTS "C:/tools/msys64/usr/bin/make.exe")
-        set(Make_EXECUTABLE "C:/tools/msys64/usr/bin/make.exe" CACHE FILEPATH "MSYS2 Make" FORCE)
-    elseif(EXISTS "D:/msys64/usr/bin/make.exe")
-        set(Make_EXECUTABLE "D:/msys64/usr/bin/make.exe" CACHE FILEPATH "MSYS2 Make" FORCE)
-    elseif(EXISTS "C:/msys2/usr/bin/make.exe")
-        set(Make_EXECUTABLE "C:/msys2/usr/bin/make.exe" CACHE FILEPATH "MSYS2 Make" FORCE)
-    else()
-        # Fallback to find_program with HINTS (may still find MSYS make)
-        find_program(Make_EXECUTABLE
-            NAMES make mingw32-make
-            HINTS
-                "C:/msys64/usr/bin"
-                "C:/msys64/bin"
-                "C:/tools/msys64/usr/bin"
-                "D:/msys64/usr/bin"
-            NO_DEFAULT_PATH
-        )
+    # Check all known MSYS2 locations (msys, mingw64, ucrt64, clang64).
+    set(_msys_make_candidates
+        "C:/msys64/usr/bin/make.exe"
+        "C:/msys64/bin/make.exe"
+        "C:/msys64/mingw64/bin/make.exe"
+        "C:/msys64/mingw64/bin/mingw32-make.exe"
+        "C:/msys64/ucrt64/bin/make.exe"
+        "C:/msys64/ucrt64/bin/mingw32-make.exe"
+        "C:/msys64/clang64/bin/make.exe"
+        "C:/tools/msys64/usr/bin/make.exe"
+        "C:/tools/msys64/mingw64/bin/make.exe"
+        "D:/msys64/usr/bin/make.exe"
+        "C:/msys2/usr/bin/make.exe"
+    )
+    foreach(_p IN LISTS _msys_make_candidates)
+        if(EXISTS "${_p}")
+            set(Make_EXECUTABLE "${_p}" CACHE FILEPATH "MSYS2 Make" FORCE)
+            message(STATUS "Found MSYS2 make at ${_p}")
+            break()
+        endif()
+    endforeach()
+    if(NOT Make_EXECUTABLE)
+        # Fallback: search PATH for any make that is from MSYS (contains msys)
+        find_program(Make_EXECUTABLE NAMES make gmake mingw32-make)
+        if(Make_EXECUTABLE AND Make_EXECUTABLE MATCHES "msys")
+            message(STATUS "Found MSYS make via PATH: ${Make_EXECUTABLE}")
+        elseif(Make_EXECUTABLE)
+            message(STATUS "Found non-MSYS make at '${Make_EXECUTABLE}' - ignoring, need MSYS")
+            unset(Make_EXECUTABLE)
+            unset(Make_EXECUTABLE CACHE)
+            # Try where.exe to locate MSYS make
+            execute_process(
+                COMMAND where make
+                OUTPUT_VARIABLE _where_make
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+            )
+            message(STATUS "where make output: ${_where_make}")
+            string(REGEX MATCH "([^\r\n]*msys64[^\r\n]*make\\.exe)" _msys_make "${_where_make}")
+            if(_msys_make AND EXISTS "${_msys_make}")
+                set(Make_EXECUTABLE "${_msys_make}" CACHE FILEPATH "MSYS2 Make" FORCE)
+                message(STATUS "Found MSYS make via where: ${Make_EXECUTABLE}")
+            endif()
+        endif()
     endif()
     if(NOT Make_EXECUTABLE OR NOT EXISTS "${Make_EXECUTABLE}")
         message(FATAL_ERROR
-            "MSYS2 make not found (looked in C:/msys64/usr/bin/make.exe, etc.).\n"
+            "MSYS2 make not found. Searched:\n"
+            "  ${_msys_make_candidates}\n"
+            "  and PATH (found '${Make_EXECUTABLE}').\n"
             "  Install MSYS2 from https://www.msys2.org, then in MSYS2 shell run:\n"
             "    pacman -S make base-devel autoconf automake libtool pkg-config\n"
-            "  Verify: ls C:/msys64/usr/bin/make.exe should exist.\n"
+            "  Verify: In PowerShell run 'Get-ChildItem C:\\msys64\\usr\\bin\\make.exe' and 'where.exe make'\n"
             "  After installing, delete external/imagedecoder-houri/library/.cxx and re-sync Gradle.\n"
             "  Or set -DMake_EXECUTABLE=C:/msys64/usr/bin/make.exe explicitly.")
     endif()
