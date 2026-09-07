@@ -23,36 +23,37 @@ if(NOT Meson_EXECUTABLE)
 endif()
 # Autotools `configure` scripts need bash; prefer MSYS2 bash on Windows
 # over Git Bash and WSL's C:\Windows\System32\bash.exe (which expects /mnt/c/... paths).
-# Gradle may already pass -DBASH_EXECUTABLE="C:/msys64/usr/bin/bash.exe" (see library/build.gradle.kts).
-if(NOT BASH_EXECUTABLE)
-    if(WIN32)
-        if(EXISTS "C:/msys64/usr/bin/bash.exe")
-            set(BASH_EXECUTABLE "C:/msys64/usr/bin/bash.exe" CACHE FILEPATH "MSYS2 Bash")
-        elseif(EXISTS "C:/tools/msys64/usr/bin/bash.exe")
-            set(BASH_EXECUTABLE "C:/tools/msys64/usr/bin/bash.exe" CACHE FILEPATH "MSYS2 Bash")
-        elseif(EXISTS "C:/msys64/bin/bash.exe")
-            set(BASH_EXECUTABLE "C:/msys64/bin/bash.exe" CACHE FILEPATH "MSYS2 Bash")
-        elseif(EXISTS "C:/Program Files/Git/usr/bin/bash.exe")
-            set(BASH_EXECUTABLE "C:/Program Files/Git/usr/bin/bash.exe" CACHE FILEPATH "Git Bash")
-        elseif(EXISTS "C:/Program Files/Git/bin/bash.exe")
-            set(BASH_EXECUTABLE "C:/Program Files/Git/bin/bash.exe" CACHE FILEPATH "Git Bash")
-        else()
-            find_program(BASH_EXECUTABLE bash
-                HINTS
-                    "C:/msys64/usr/bin"
-                    "C:/msys64/bin"
-                    "C:/tools/msys64/usr/bin"
-                    "C:/Program Files/Git/usr/bin"
-                    "C:/Program Files/Git/bin"
-                NO_DEFAULT_PATH
-            )
-            if(NOT BASH_EXECUTABLE)
-                find_program(BASH_EXECUTABLE bash)
-            endif()
+# Always force MSYS2/Git over a cached WSL value (CMakeCache persists across builds).
+if(WIN32)
+    if(EXISTS "C:/msys64/usr/bin/bash.exe")
+        set(BASH_EXECUTABLE "C:/msys64/usr/bin/bash.exe" CACHE FILEPATH "MSYS2 Bash" FORCE)
+    elseif(EXISTS "C:/tools/msys64/usr/bin/bash.exe")
+        set(BASH_EXECUTABLE "C:/tools/msys64/usr/bin/bash.exe" CACHE FILEPATH "MSYS2 Bash" FORCE)
+    elseif(EXISTS "C:/msys64/bin/bash.exe")
+        set(BASH_EXECUTABLE "C:/msys64/bin/bash.exe" CACHE FILEPATH "MSYS2 Bash" FORCE)
+    elseif(EXISTS "C:/Program Files/Git/usr/bin/bash.exe")
+        set(BASH_EXECUTABLE "C:/Program Files/Git/usr/bin/bash.exe" CACHE FILEPATH "Git Bash" FORCE)
+    elseif(EXISTS "C:/Program Files/Git/bin/bash.exe")
+        set(BASH_EXECUTABLE "C:/Program Files/Git/bin/bash.exe" CACHE FILEPATH "Git Bash" FORCE)
+    elseif(BASH_EXECUTABLE MATCHES "System32|WindowsApps" OR NOT BASH_EXECUTABLE)
+        find_program(_better_bash bash
+            HINTS
+                "C:/msys64/usr/bin"
+                "C:/msys64/bin"
+                "C:/tools/msys64/usr/bin"
+                "C:/Program Files/Git/usr/bin"
+                "C:/Program Files/Git/bin"
+            NO_DEFAULT_PATH
+        )
+        if(_better_bash)
+            set(BASH_EXECUTABLE "${_better_bash}" CACHE FILEPATH "Bash" FORCE)
+        elseif(NOT BASH_EXECUTABLE)
+            find_program(BASH_EXECUTABLE bash)
         endif()
-    else()
-        find_program(BASH_EXECUTABLE bash)
     endif()
+endif()
+if(NOT BASH_EXECUTABLE)
+    find_program(BASH_EXECUTABLE bash)
 endif()
 if(NOT BASH_EXECUTABLE)
     set(BASH_EXECUTABLE "bash")
