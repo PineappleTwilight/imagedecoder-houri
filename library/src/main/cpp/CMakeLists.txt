@@ -488,9 +488,9 @@ message(STATUS "MSYS CC: ${CMAKE_C_COMPILER} -> ${_cc_msys}")
 message(STATUS "MSYS CXX: ${CMAKE_CXX_COMPILER} -> ${_cxx_msys}")
 message(STATUS "MSYS AR: ${CMAKE_AR} -> ${_ar_msys}")
 message(STATUS "MSYS PREFIX: ${THIRD_PARTY_LIB_PATH} -> ${EP_AUTOTOOLS_PREFIX}")
-# AS is empty for Android (clang handles asm); keep empty to avoid
-# passing a Windows path that would be mis-parsed. If you need a real AS,
-# use _as_msys.
+# AS is empty for Android (clang handles asm); omit it entirely to avoid
+# 'invalid variable name' errors from autotools when passed as AS= with empty
+# value that gets mis-parsed as a variable assignment.
 set(EP_AUTOTOOLS_ARGS
     "--host=${ANDROID_TARGET}"
     "CC=${_cc_msys}"
@@ -498,7 +498,6 @@ set(EP_AUTOTOOLS_ARGS
     "CXX=${_cxx_msys}"
     "CXXFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
     "AR=${_ar_msys}"
-    "AS="
     "LD=${_ld_msys}"
     "RANLIB=${_ranlib_msys}"
     "STRIP=${_strip_msys}"
@@ -507,6 +506,9 @@ set(EP_AUTOTOOLS_ARGS
     "--enable-static"
     "--with-pic"
 )
+if(_as_msys)
+    list(APPEND EP_AUTOTOOLS_ARGS "AS=${_as_msys}")
+endif()
 # Space-separated version for use inside bash -c " ... ${EP_AUTOTOOLS_ARGS_STR} ..."
 # (CMake lists are ; separated, but inside a bash string they need to be space separated)
 string(REPLACE ";" " " EP_AUTOTOOLS_ARGS_STR "${EP_AUTOTOOLS_ARGS}")
