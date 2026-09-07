@@ -8,16 +8,20 @@ endif()
 project("imagedecoder_s")
 
 # ---------------------------------------------------------------------------
-# Helper: Convert a Windows absolute path (C:/foo or C:\foo) to MSYS Unix path
-# (/c/foo). Handles any drive letter, lower-cases it, and preserves the rest.
-# If path is already Unix (/c/... or /...), returns unchanged. If not absolute,
-# returns the cmake-normalised path.
+# Helper: Convert a Windows absolute path (C:/foo or C:\foo) to Unix path
+# Handles both MSYS (/c/foo) and WSL (/mnt/c/foo). Detects WSL via
+# /proc/version so that Windows cmake + WSL bash interop uses /mnt/c/.
+# If path is already Unix (/c/..., /mnt/c/..., /...), returns unchanged.
 # ---------------------------------------------------------------------------
 function(to_msys_path win_path out_var)
     # Normalise backslashes to forward slashes without using file(TO_CMAKE_PATH),
     # which behaves differently on Linux vs Windows (on Linux it inserts ';').
     string(REPLACE "\\" "/" _tmp "${win_path}")
-    # Already MSYS Unix style? (/c/... or /d/... or /usr/...)
+    # Already Unix style? (/c/... or /mnt/c/... or /usr/...)
+    if(_tmp MATCHES "^/mnt/[a-z]/")
+        set(${out_var} "${_tmp}" PARENT_SCOPE)
+        return()
+    endif()
     if(_tmp MATCHES "^/[a-z]/")
         set(${out_var} "${_tmp}" PARENT_SCOPE)
         return()
@@ -30,7 +34,19 @@ function(to_msys_path win_path out_var)
     string(REGEX MATCH "^([A-Za-z]):/(.*)" _m "${_tmp}")
     if(CMAKE_MATCH_1)
         string(TOLOWER "${CMAKE_MATCH_1}" _drive)
-        set(${out_var} "/${_drive}/${CMAKE_MATCH_2}" PARENT_SCOPE)
+        # Detect WSL: /proc/version contains microsoft/WSL
+        set(_is_wsl FALSE)
+        if(EXISTS "/proc/version")
+            file(READ "/proc/version" _wsl_ver)
+            if(_wsl_ver MATCHES "microsoft|WSL")
+                set(_is_wsl TRUE)
+            endif()
+        endif()
+        if(_is_wsl)
+            set(${out_var} "/mnt/${_drive}/${CMAKE_MATCH_2}" PARENT_SCOPE)
+        else()
+            set(${out_var} "/${_drive}/${CMAKE_MATCH_2}" PARENT_SCOPE)
+        endif()
     else()
         set(${out_var} "${_tmp}" PARENT_SCOPE)
     endif()
@@ -522,23 +538,31 @@ string(REPLACE ";" " " EP_AUTOTOOLS_ARGS_STR "${EP_AUTOTOOLS_ARGS}")
 # Helpers take <SOURCE_DIR> as $1, cygpath-convert it, cd there, then exec.
 # ---------------------------------------------------------------------------
 set(AUTOTOOLS_HELPER "${CMAKE_BINARY_DIR}/autotools_helper.sh")
-file(WRITE "${AUTOTOOLS_HELPER}" "#!/usr/bin/env bash\nset -e\nsrc=\"$1\"\nshift\nif command -v cygpath >/dev/null 2>&1; then\n  src=$(cygpath -u \"$src\")\nfi\ncd \"$src\"\nexec \"$@\"\n")
+file(WRITE "${AUTOTOOLS_HELPER}" "#!/usr/bin/env bash\nset -e\nsrc=\"$1\"\nshift\n# Handle Windows drive paths for both MSYS (/c/) and WSL (/mnt/c/)\nif [[ \"$src\" =~ ^[A-Za-z]:/ ]]; then\n  if command -v cygpath >/dev/null 2>&1; then src=$(cygpath -u \"$src\"); elif command -v wslpath >/dev/null 2>&1; then src=$(wslpath -u \"$src\" 2>/dev/null || echo \"$src\"); fi\nfi\ncd \"$src\"\nexec \"$@\"\n")
 execute_process(COMMAND ${CMAKE_COMMAND} -E chmod +x "${AUTOTOOLS_HELPER}")
 to_msys_path("${AUTOTOOLS_HELPER}" AUTOTOOLS_HELPER_MSYS)
 set(AUTOTOOLS_HELPER_AUTOGEN "${CMAKE_BINARY_DIR}/autotools_helper_autogen.sh")
-file(WRITE "${AUTOTOOLS_HELPER_AUTOGEN}" "#!/usr/bin/env bash\nset -e\nsrc=\"$1\"\nshift\nif command -v cygpath >/dev/null 2>&1; then\n  src=$(cygpath -u \"$src\")\nfi\ncd \"$src\"\nexec ./autogen.sh \"$@\"\n")
+file(WRITE "${AUTOTOOLS_HELPER_AUTOGEN}" "#!/usr/bin/env bash\nset -e\nsrc=\"$1\"\nshift\nif [[ \"$src\" =~ ^[A-Za-z]:/ ]]; then\n  if command -v cygpath >/dev/null 2>&1; then src=$(cygpath -u \"$src\"); elif command -v wslpath >/dev/null 2>&1; then src=$(wslpath -u \"$src\" 2>/dev/null || echo \"$src\"); fi\nfi\ncd \"$src\"\nexec ./autogen.sh \"$@\"\n")
 execute_process(COMMAND ${CMAKE_COMMAND} -E chmod +x "${AUTOTOOLS_HELPER_AUTOGEN}")
 to_msys_path("${AUTOTOOLS_HELPER_AUTOGEN}" AUTOTOOLS_HELPER_AUTOGEN_MSYS)
 set(AUTOTOOLS_HELPER_AUTOGEN_CONFIGURE "${CMAKE_BINARY_DIR}/autotools_helper_autogen_configure.sh")
-file(WRITE "${AUTOTOOLS_HELPER_AUTOGEN_CONFIGURE}" "#!/usr/bin/env bash\nset -e\nsrc=\"$1\"\nshift\nif command -v cygpath >/dev/null 2>&1; then\n  src=$(cygpath -u \"$src\")\nfi\ncd \"$src\"\n./autogen.sh\nexec ./configure \"$@\"\n")
+file(WRITE "${AUTOTOOLS_HELPER_AUTOGEN_CONFIGURE}" "#!/usr/bin/env bash\nset -e\nsrc=\"$1\"\nshift\nif [[ \"$src\" =~ ^[A-Za-z]:/ ]]; then\n  if command -v cygpath >/dev/null 2>&1; then src=$(cygpath -u \"$src\"); elif command -v wslpath >/dev/null 2>&1; then src=$(wslpath -u \"$src\" 2>/dev/null || echo \"$src\"); fi\nfi\ncd \"$src\"\n./autogen.sh\nexec ./configure \"$@\"\n")
 execute_process(COMMAND ${CMAKE_COMMAND} -E chmod +x "${AUTOTOOLS_HELPER_AUTOGEN_CONFIGURE}")
 to_msys_path("${AUTOTOOLS_HELPER_AUTOGEN_CONFIGURE}" AUTOTOOLS_HELPER_AUTOGEN_CONFIGURE_MSYS)
 
 # Patch helper for libiconv (avoids " and ; in PATCH_COMMAND which splits ExternalProject stamp)
+# Handles both MSYS (/c/) and WSL (/mnt/c/) via cygpath/wslpath fallback.
 set(PATCH_ICONV_HELPER "${CMAKE_BINARY_DIR}/patch_iconv.sh")
-file(WRITE "${PATCH_ICONV_HELPER}" "#!/usr/bin/env bash\nset -e\nsrc=\"$1\"\nif command -v cygpath >/dev/null 2>&1; then src=$(cygpath -u \"$src\"); fi\ncd \"$src\"\n# Handle both possible locations for localcharset.c\nfor f in libcharset/lib/localcharset.c lib/localcharset.c; do if [ -f \"$f\" ]; then sed -i -e 's/codeset = nl_langinfo (CODESET)/codeset = \"UTF-8\"/' \"$f\" 2>/dev/null || true; sed -i -e 's/#if HAVE_LANGINFO_CODESET/#if 0 \\/\\/ patched/' \"$f\" 2>/dev/null || true; echo \"patched $f\"; fi; done\n# Prepend F_SETFD guard if not present\nif [ -f \"srclib/fcntl.c\" ] && ! grep -q 'ifndef F_SETFD' srclib/fcntl.c 2>/dev/null; then (echo '#ifndef F_SETFD' && echo '#define F_SETFD 2' && echo '#endif' && cat srclib/fcntl.c) > srclib/fcntl.c.tmp && mv srclib/fcntl.c.tmp srclib/fcntl.c && echo \"patched srclib/fcntl.c\"; fi\necho patched-done\n")
+file(WRITE "${PATCH_ICONV_HELPER}" "#!/usr/bin/env bash\nset -e\nsrc=\"$1\"\nif [[ \"$src\" =~ ^[A-Za-z]:/ ]]; then\n  if command -v cygpath >/dev/null 2>&1; then src=$(cygpath -u \"$src\"); elif command -v wslpath >/dev/null 2>&1; then src=$(wslpath -u \"$src\" 2>/dev/null || echo \"$src\"); fi\nfi\ncd \"$src\"\n# Handle both possible locations for localcharset.c (MSYS and WSL sed)\nfor f in libcharset/lib/localcharset.c lib/localcharset.c; do if [ -f \"$f\" ]; then sed -i -e 's/codeset = nl_langinfo (CODESET)/codeset = \"UTF-8\"/' \"$f\" 2>/dev/null || true; sed -i -e 's/#if HAVE_LANGINFO_CODESET/#if 0 \\/\\/ patched/' \"$f\" 2>/dev/null || true; echo \"patched $f\"; fi; done\n# Prepend F_SETFD guard if not present; also guard duplicate case when F_GETFD==F_SETFD on some hosts\nif [ -f \"srclib/fcntl.c\" ] && ! grep -q 'ifndef F_SETFD' srclib/fcntl.c 2>/dev/null; then (echo '#ifndef F_SETFD' && echo '#define F_SETFD 2' && echo '#endif' && cat srclib/fcntl.c) > srclib/fcntl.c.tmp && mv srclib/fcntl.c.tmp srclib/fcntl.c && echo \"patched srclib/fcntl.c guard\"; fi\n# Ensure the inner switch does not duplicate when F_GETFD==F_SETFD (e.g. mis-detected host headers)\nif [ -f \"srclib/fcntl.c\" ]; then sed -i -e 's/#ifdef F_SETFD/#if defined(F_SETFD) \\&\\& F_SETFD != F_GETFD/' srclib/fcntl.c 2>/dev/null || true; echo \"patched srclib/fcntl.c duplicate guard\"; fi\necho patched-done\n")
 execute_process(COMMAND ${CMAKE_COMMAND} -E chmod +x "${PATCH_ICONV_HELPER}")
 to_msys_path("${PATCH_ICONV_HELPER}" PATCH_ICONV_HELPER_MSYS)
+
+# Configure helper for libiconv (avoids bash -c quoting that breaks --host and CC propagation on WSL/MSYS)
+# Takes <SOURCE_DIR> as $1, handles cygpath/wslpath, then runs ./configure with fixed args and post-sed.
+set(CONFIGURE_ICONV_HELPER "${CMAKE_BINARY_DIR}/configure_iconv.sh")
+file(WRITE "${CONFIGURE_ICONV_HELPER}" "#!/usr/bin/env bash\nset -e\nsrc=\"$1\"\nshift\nif [[ \"$src\" =~ ^[A-Za-z]:/ ]]; then\n  if command -v cygpath >/dev/null 2>&1; then src=$(cygpath -u \"$src\"); elif command -v wslpath >/dev/null 2>&1; then src=$(wslpath -u \"$src\" 2>/dev/null || echo \"$src\"); fi\nfi\n# Prefix may be Windows style; convert similarly\nprefix_in=\"$1\"\nif [[ \"$prefix_in\" =~ ^[A-Za-z]:/ ]]; then\n  if command -v cygpath >/dev/null 2>&1; then prefix_in=$(cygpath -u \"$prefix_in\" 2>/dev/null || echo \"$prefix_in\"); elif command -v wslpath >/dev/null 2>&1; then prefix_in=$(wslpath -u \"$prefix_in\" 2>/dev/null || echo \"$prefix_in\"); fi\nfi\n# Remaining args: host triple\nHOST_TRIPLE=\"$2\"\ncd \"$src\"\n./configure \"--host=$HOST_TRIPLE\" \"--prefix=$prefix_in\" --disable-shared --enable-static --with-pic --enable-extra-encodings\nsed -i -e '/^#define gid_t/d' -e '/^#define uid_t/d' -e '/^#define HAVE_LANGINFO_CODESET/d' config.h\nsed -i -e '/^#define HAVE_LANGINFO_CODESET/d' libcharset/config.h 2>/dev/null || true\n")
+execute_process(COMMAND ${CMAKE_COMMAND} -E chmod +x "${CONFIGURE_ICONV_HELPER}")
+to_msys_path("${CONFIGURE_ICONV_HELPER}" CONFIGURE_ICONV_HELPER_MSYS)
 
 include("cmake/zlib.cmake")
 include("cmake/lcms2.cmake")
