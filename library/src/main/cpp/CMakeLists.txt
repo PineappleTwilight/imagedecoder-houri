@@ -509,6 +509,9 @@ set(EP_AUTOTOOLS_ARGS
 if(_as_msys)
     list(APPEND EP_AUTOTOOLS_ARGS "AS=${_as_msys}")
 endif()
+# For cmake -E env, we need the same args but as env vars (CC, CFLAGS, etc.)
+# The helper will be called with only non-VAR args (like --host, --prefix, etc.)
+# and the VAR=VALUE will be set via env.
 # Space-separated version for use inside bash -c " ... ${EP_AUTOTOOLS_ARGS_STR} ..."
 # (CMake lists are ; separated, but inside a bash string they need to be space separated)
 string(REPLACE ";" " " EP_AUTOTOOLS_ARGS_STR "${EP_AUTOTOOLS_ARGS}")
