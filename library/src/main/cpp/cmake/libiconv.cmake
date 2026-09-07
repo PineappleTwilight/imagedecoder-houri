@@ -6,9 +6,12 @@ include(ExternalProject)
 ExternalProject_Add(ep_libiconv
     URL https://ftp.gnu.org/pub/gnu/libiconv/libiconv-1.17.tar.gz
     BUILD_IN_SOURCE 1
+    LOG_CONFIGURE 1
+    LOG_BUILD 1
+    LOG_INSTALL 1
     CONFIGURE_COMMAND
         "${BASH_EXECUTABLE}" -c
-        "set -e; if command -v cygpath >/dev/null 2>&1; then src=$(cygpath -u \"<SOURCE_DIR>\"); else src=\"<SOURCE_DIR>\"; fi; cd \"$src\" && ./configure ${EP_AUTOTOOLS_ARGS_STR} --enable-extra-encodings"
+        "set -ex; echo "libiconv: BASH=/bin/bash, src=<SOURCE_DIR>"; if command -v cygpath >/dev/null 2>&1; then src=$(cygpath -u \"<SOURCE_DIR>\"); else src=\"<SOURCE_DIR>\"; fi; cd \"$src\" && ./configure ${EP_AUTOTOOLS_ARGS_STR} --enable-extra-encodings"
     BUILD_COMMAND ${Make_EXECUTABLE} -j${NPROC}
     INSTALL_COMMAND ${Make_EXECUTABLE} -j${NPROC} install
 )
