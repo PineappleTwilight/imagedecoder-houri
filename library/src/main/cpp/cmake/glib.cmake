@@ -5,7 +5,7 @@ ExternalProject_Add(ep_glib
     URL_HASH SHA256=205bf5dab175de68f11e33be7bb36d4ad4c5a5097d8c0c88a8682b257b6293dc
     DEPENDS ep_zlib ep_libffi ep_libiconv
     CONFIGURE_COMMAND
-        ${CMAKE_COMMAND} -E env "MSYS_NO_PATHCONV=1"
+        ${CMAKE_COMMAND} -E env "MSYS_NO_PATHCONV=1" "NINJA=${Ninja_EXECUTABLE}"
         ${Meson_EXECUTABLE} setup
         ${EP_MESON_ARGS}
         -Dtests=false
