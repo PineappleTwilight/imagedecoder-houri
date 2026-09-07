@@ -24,17 +24,23 @@ endif()
 # Autotools `configure` scripts need bash; prefer Git for Windows bash on Windows
 # over WSL's C:\Windows\System32\bash.exe (which expects /mnt/c/... paths).
 if(WIN32)
-    find_program(BASH_EXECUTABLE bash
-        HINTS
-            "C:/Program Files/Git/usr/bin"
-            "C:/Program Files/Git/bin"
-            "C:/msys64/usr/bin"
-            "C:/msys64/bin"
-            "C:/tools/msys64/usr/bin"
-        NO_DEFAULT_PATH
-    )
-    if(NOT BASH_EXECUTABLE)
-        find_program(BASH_EXECUTABLE bash)
+    if(EXISTS "C:/Program Files/Git/usr/bin/bash.exe")
+        set(BASH_EXECUTABLE "C:/Program Files/Git/usr/bin/bash.exe" CACHE FILEPATH "Git Bash" FORCE)
+    elseif(EXISTS "C:/Program Files/Git/bin/bash.exe")
+        set(BASH_EXECUTABLE "C:/Program Files/Git/bin/bash.exe" CACHE FILEPATH "Git Bash" FORCE)
+    else()
+        find_program(BASH_EXECUTABLE bash
+            HINTS
+                "C:/Program Files/Git/usr/bin"
+                "C:/Program Files/Git/bin"
+                "C:/msys64/usr/bin"
+                "C:/msys64/bin"
+                "C:/tools/msys64/usr/bin"
+            NO_DEFAULT_PATH
+        )
+        if(NOT BASH_EXECUTABLE)
+            find_program(BASH_EXECUTABLE bash)
+        endif()
     endif()
 else()
     find_program(BASH_EXECUTABLE bash)
@@ -43,6 +49,7 @@ if(NOT BASH_EXECUTABLE)
     set(BASH_EXECUTABLE "bash")
 endif()
 set(AUTOTOOLS_BASH_PREFIX "${BASH_EXECUTABLE}")
+message(STATUS "Using BASH for autotools: ${BASH_EXECUTABLE}")
 find_program(Ninja_EXECUTABLE NAMES ninja ninja.exe
     HINTS
         "$ENV{ANDROID_HOME}/cmake/3.22.1/bin"
