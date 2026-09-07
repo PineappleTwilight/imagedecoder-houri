@@ -534,6 +534,12 @@ file(WRITE "${AUTOTOOLS_HELPER_AUTOGEN_CONFIGURE}" "#!/usr/bin/env bash\nset -e\
 execute_process(COMMAND ${CMAKE_COMMAND} -E chmod +x "${AUTOTOOLS_HELPER_AUTOGEN_CONFIGURE}")
 to_msys_path("${AUTOTOOLS_HELPER_AUTOGEN_CONFIGURE}" AUTOTOOLS_HELPER_AUTOGEN_CONFIGURE_MSYS)
 
+# Patch helper for libiconv (avoids " and ; in PATCH_COMMAND which splits ExternalProject stamp)
+set(PATCH_ICONV_HELPER "${CMAKE_BINARY_DIR}/patch_iconv.sh")
+file(WRITE "${PATCH_ICONV_HELPER}" "#!/usr/bin/env bash\nset -e\nsrc=\"$1\"\nif command -v cygpath >/dev/null 2>&1; then src=$(cygpath -u \"$src\"); fi\ncd \"$src\"\n# Handle both possible locations for localcharset.c\nfor f in libcharset/lib/localcharset.c lib/localcharset.c; do if [ -f \"$f\" ]; then sed -i -e 's/codeset = nl_langinfo (CODESET)/codeset = \"UTF-8\"/' \"$f\" 2>/dev/null || true; sed -i -e 's/#if HAVE_LANGINFO_CODESET/#if 0 \\/\\/ patched/' \"$f\" 2>/dev/null || true; echo \"patched $f\"; fi; done\n# Prepend F_SETFD guard if not present\nif [ -f \"srclib/fcntl.c\" ] && ! grep -q 'ifndef F_SETFD' srclib/fcntl.c 2>/dev/null; then (echo '#ifndef F_SETFD' && echo '#define F_SETFD 2' && echo '#endif' && cat srclib/fcntl.c) > srclib/fcntl.c.tmp && mv srclib/fcntl.c.tmp srclib/fcntl.c && echo \"patched srclib/fcntl.c\"; fi\necho patched-done\n")
+execute_process(COMMAND ${CMAKE_COMMAND} -E chmod +x "${PATCH_ICONV_HELPER}")
+to_msys_path("${PATCH_ICONV_HELPER}" PATCH_ICONV_HELPER_MSYS)
+
 include("cmake/zlib.cmake")
 include("cmake/lcms2.cmake")
 
