@@ -492,7 +492,7 @@ message(STATUS "MSYS PREFIX: ${THIRD_PARTY_LIB_PATH} -> ${EP_AUTOTOOLS_PREFIX}")
 # passing a Windows path that would be mis-parsed. If you need a real AS,
 # use _as_msys.
 set(EP_AUTOTOOLS_ARGS
-    "--host=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
+    "--host=${ANDROID_TARGET}"
     "CC=${_cc_msys}"
     "CFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
     "CXX=${_cxx_msys}"

@@ -2,7 +2,7 @@ include(ExternalProject)
 
 ExternalProject_Add(ep_lcms2
     URL https://downloads.sourceforge.net/project/lcms/lcms/2.19/lcms2-2.19.tar.gz
-    URL_HASH SHA256=a0d9cc6b6f0f334fa1ced499d42298a4b89dccf6f745a4a5072d1b76929522d1d4
+    URL_HASH SHA256=49e7e134e4299733dd0eda434fa468997a28ab3d33fa397c642b03644f552216
     BUILD_IN_SOURCE true
     CONFIGURE_COMMAND
         "${BASH_EXECUTABLE}" "${AUTOTOOLS_HELPER_MSYS}" "<SOURCE_DIR>" ./configure ${EP_AUTOTOOLS_ARGS}
