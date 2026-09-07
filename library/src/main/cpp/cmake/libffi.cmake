@@ -5,8 +5,8 @@ ExternalProject_Add(ep_libffi
     GIT_TAG v3.6.0
     BUILD_IN_SOURCE true
     CONFIGURE_COMMAND
-        <SOURCE_DIR>/autogen.sh &&
-        <SOURCE_DIR>/configure ${EP_AUTOTOOLS_ARGS}
+        ${AUTOTOOLS_BASH_PREFIX} <SOURCE_DIR>/autogen.sh &&
+        ${AUTOTOOLS_BASH_PREFIX} <SOURCE_DIR>/configure ${EP_AUTOTOOLS_ARGS}
         --disable-builddir
         --disable-multi-os-directory
         --enable-pax_emutramp

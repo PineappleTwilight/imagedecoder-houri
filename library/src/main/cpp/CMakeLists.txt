@@ -7,9 +7,51 @@ if(NOT Make_EXECUTABLE)
     message(FATAL_ERROR "Make is required")
 endif()
 
-find_program(Meson_EXECUTABLE meson)
+find_program(Meson_EXECUTABLE
+    NAMES meson meson.exe
+    HINTS
+        "C:/Program Files/Meson"
+        "$ENV{ProgramFiles}/Meson"
+        "$ENV{ProgramW6432}/Meson"
+        "$ENV{LOCALAPPDATA}/Programs/Meson"
+        "$ENV{USERPROFILE}/AppData/Local/Programs/Meson"
+        "C:/Program Files (x86)/Meson"
+    PATH_SUFFIXES bin
+)
 if(NOT Meson_EXECUTABLE)
-    message(FATAL_ERROR "Meson is required")
+    find_program(Python_EXECUTABLE NAMES python python3)
+    if(Python_EXECUTABLE)
+        execute_process(
+            COMMAND ${Python_EXECUTABLE} -m meson --version
+            RESULT_VARIABLE _meson_py_result
+            OUTPUT_QUIET ERROR_QUIET
+        )
+        if(_meson_py_result EQUAL 0)
+            set(Meson_EXECUTABLE "${Python_EXECUTABLE} -m meson" CACHE STRING "Meson via python -m meson" FORCE)
+        endif()
+    endif()
+endif()
+if(NOT Meson_EXECUTABLE)
+    message(FATAL_ERROR "Meson is required (tried PATH and C:/Program Files/Meson/meson.exe and python -m meson; add Meson to PATH or set -DMeson_EXECUTABLE=...)")
+endif()
+
+# Autotools `configure` scripts need bash; use it explicitly on both Linux and Windows
+# so Windows (Git Bash / MSYS2) works via `bash configure` instead of `cmd.exe configure`.
+find_program(BASH_EXECUTABLE bash)
+if(NOT BASH_EXECUTABLE AND WIN32)
+    find_program(BASH_EXECUTABLE bash
+        HINTS
+            "C:/Program Files/Git/usr/bin"
+            "C:/Program Files/Git/bin"
+            "C:/msys64/usr/bin"
+            "C:/msys64/bin"
+            "C:/tools/msys64/usr/bin"
+    )
+endif()
+if(BASH_EXECUTABLE)
+    set(AUTOTOOLS_BASH_PREFIX "${BASH_EXECUTABLE}")
+else()
+    set(AUTOTOOLS_BASH_PREFIX "")
 endif()
 
 set(THIRD_PARTY_LIB_PATH ${CMAKE_BINARY_DIR}/fakeroot)
