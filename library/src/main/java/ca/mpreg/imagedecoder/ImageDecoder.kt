@@ -115,6 +115,15 @@ class ImageDecoder private constructor(
 
     private external fun free()
 
+    data class ImageInfo(
+        val width: Int,
+        val height: Int,
+        val pages: Int,
+        val format: String,
+        val isHdr: Boolean,
+        val durationMs: Int,
+    )
+
     companion object {
         private val cleaner: Cleaner = Cleaner.create()
 
@@ -128,6 +137,10 @@ class ImageDecoder private constructor(
         @JvmStatic
         @Throws(DecodeException::class)
         external fun new(inputStream: InputStream): ImageDecoder
+
+        @JvmStatic
+        @Throws(DecodeException::class)
+        external fun getInfo(inputStream: InputStream): ImageInfo
 
         @JvmStatic
         @Throws(DecodeException::class)

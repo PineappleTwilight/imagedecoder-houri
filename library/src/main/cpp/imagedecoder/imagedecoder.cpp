@@ -212,6 +212,64 @@ Java_ca_mpreg_imagedecoder_ImageDecoder_nativeFree(JNIEnv* env, jclass, jlong pt
 }
 
 extern "C" JNIEXPORT jobject JNICALL
+Java_ca_mpreg_imagedecoder_ImageDecoder_getInfo(JNIEnv* env, jclass, jobject jstream)
+{
+  size_t size = 0;
+  uint8_t* buffer = read_all(env, jstream, &size);
+  if (env->ExceptionCheck() || buffer == nullptr || size == 0) {
+    if (buffer != nullptr) g_free(buffer);
+    if (!env->ExceptionCheck()) {
+      jclass ex = env->FindClass("ca/mpreg/imagedecoder/ImageDecoder$DecodeException");
+      if (ex != nullptr) env->ThrowNew(ex, "Empty or unreadable image stream");
+    }
+    return nullptr;
+  }
+
+  try {
+    vips::VImage image = vips::VImage::new_from_buffer(buffer, size, "");
+    int w = image.width();
+    int h = image.height();
+    int pages = image.get_typeof(VIPS_META_N_PAGES) != 0 ? image.get_int(VIPS_META_N_PAGES) : 1;
+    bool isHdr = image.interpretation() == VIPS_INTERPRETATION_scRGB;
+    int duration = 0;
+    if (pages > 0 && image.get_typeof("delay") != 0) {
+      int* delays;
+      int n;
+      image.get_array_int("delay", &delays, &n);
+      if (n > 0) duration = delays[0];
+    }
+    const char* loaderC = image.get_typeof("vips-loader") != 0 ? image.get_string("vips-loader") : "";
+    std::string loaderStr = loaderC ? loaderC : "";
+    std::string norm;
+    if (loaderStr.rfind("jpeg", 0) == 0) norm = "jpeg";
+    else if (loaderStr.rfind("png", 0) == 0) norm = "png";
+    else if (loaderStr.rfind("webp", 0) == 0) norm = "webp";
+    else if (loaderStr.rfind("gif", 0) == 0) norm = "gif";
+    else if (loaderStr.rfind("tiff", 0) == 0) norm = "tiff";
+    else if (loaderStr.rfind("heif", 0) == 0) norm = "heif";
+    else if (loaderStr.rfind("jxl", 0) == 0) norm = "jxl";
+    else if (loaderStr.rfind("jp2k", 0) == 0) norm = "jp2";
+    else {
+      norm = loaderStr;
+      const std::string a = "load_buffer";
+      const std::string b = "load";
+      if (norm.size() >= a.size() && norm.compare(norm.size() - a.size(), a.size(), a) == 0) norm.erase(norm.size() - a.size());
+      else if (norm.size() >= b.size() && norm.compare(norm.size() - b.size(), b.size(), b) == 0) norm.erase(norm.size() - b.size());
+    }
+
+    g_free(buffer);
+    jstring jfmt = env->NewStringUTF(norm.c_str());
+    jclass cls = env->FindClass("ca/mpreg/imagedecoder/ImageDecoder$ImageInfo");
+    jmethodID ctor = env->GetMethodID(cls, "<init>", "(IIILjava/lang/String;ZI)V");
+    return env->NewObject(cls, ctor, (jint)w, (jint)h, (jint)pages, jfmt, (jboolean)isHdr, (jint)duration);
+  } catch (const vips::VError& e) {
+    g_free(buffer);
+    throw_vips_error(env, e);
+    return nullptr;
+  }
+}
+
+extern "C" JNIEXPORT jobject JNICALL
 Java_ca_mpreg_imagedecoder_ImageDecoder_decode(JNIEnv* env, jobject obj, jint page, jboolean crop,
                                                jboolean getTrim)
 {
