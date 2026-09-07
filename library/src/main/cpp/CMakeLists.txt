@@ -44,37 +44,38 @@ endfunction()
 if(WIN32)
     # Strictly require MSYS2 make on Windows. Chocolatey/MinGW make cannot
     # handle MSYS Unix paths (/c/...) and breaks autotools (C:/ vs /c/).
-    # Search MSYS locations with NO_DEFAULT_PATH so we never pick chocolatey.
-    find_program(Make_EXECUTABLE
-        NAMES make
-        HINTS
-            "C:/msys64/usr/bin"
-            "C:/msys64/bin"
-            "C:/tools/msys64/usr/bin"
-            "C:/tools/msys64/bin"
-            "D:/msys64/usr/bin"
-            "D:/msys64/bin"
-            "C:/msys2/usr/bin"
-        NO_DEFAULT_PATH
-    )
-    if(NOT Make_EXECUTABLE)
-        # One more try with mingw32-make name (some MSYS installs)
+    # Use direct EXISTS checks (more reliable than find_program with HINTS
+    # when CMAKE_FIND_ROOT_PATH is set for cross-compilation).
+    if(EXISTS "C:/msys64/usr/bin/make.exe")
+        set(Make_EXECUTABLE "C:/msys64/usr/bin/make.exe" CACHE FILEPATH "MSYS2 Make" FORCE)
+    elseif(EXISTS "C:/msys64/bin/make.exe")
+        set(Make_EXECUTABLE "C:/msys64/bin/make.exe" CACHE FILEPATH "MSYS2 Make" FORCE)
+    elseif(EXISTS "C:/tools/msys64/usr/bin/make.exe")
+        set(Make_EXECUTABLE "C:/tools/msys64/usr/bin/make.exe" CACHE FILEPATH "MSYS2 Make" FORCE)
+    elseif(EXISTS "D:/msys64/usr/bin/make.exe")
+        set(Make_EXECUTABLE "D:/msys64/usr/bin/make.exe" CACHE FILEPATH "MSYS2 Make" FORCE)
+    elseif(EXISTS "C:/msys2/usr/bin/make.exe")
+        set(Make_EXECUTABLE "C:/msys2/usr/bin/make.exe" CACHE FILEPATH "MSYS2 Make" FORCE)
+    else()
+        # Fallback to find_program with HINTS (may still find MSYS make)
         find_program(Make_EXECUTABLE
-            NAMES mingw32-make
+            NAMES make mingw32-make
             HINTS
                 "C:/msys64/usr/bin"
-                "C:/msys64/mingw64/bin"
+                "C:/msys64/bin"
+                "C:/tools/msys64/usr/bin"
+                "D:/msys64/usr/bin"
             NO_DEFAULT_PATH
         )
     endif()
-    if(NOT Make_EXECUTABLE)
+    if(NOT Make_EXECUTABLE OR NOT EXISTS "${Make_EXECUTABLE}")
         message(FATAL_ERROR
             "MSYS2 make not found (looked in C:/msys64/usr/bin/make.exe, etc.).\n"
             "  Install MSYS2 from https://www.msys2.org, then in MSYS2 shell run:\n"
             "    pacman -S make base-devel autoconf automake libtool pkg-config\n"
-            "  Ensure C:/msys64/usr/bin is on PATH before chocolatey, or set\n"
-            "    -DMake_EXECUTABLE=C:/msys64/usr/bin/make.exe\n"
-            "  After installing, delete external/imagedecoder-houri/library/.cxx and re-sync Gradle.")
+            "  Verify: ls C:/msys64/usr/bin/make.exe should exist.\n"
+            "  After installing, delete external/imagedecoder-houri/library/.cxx and re-sync Gradle.\n"
+            "  Or set -DMake_EXECUTABLE=C:/msys64/usr/bin/make.exe explicitly.")
     endif()
 endif()
 if(NOT Make_EXECUTABLE)
