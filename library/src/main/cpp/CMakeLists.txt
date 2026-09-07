@@ -42,8 +42,11 @@ endfunction()
 # Prefer MSYS2 make on Windows over MinGW or other makes that mis-handle
 # MSYS paths. Search MSYS locations first when WIN32.
 if(WIN32)
+    # Strictly require MSYS2 make on Windows. Chocolatey/MinGW make cannot
+    # handle MSYS Unix paths (/c/...) and breaks autotools (C:/ vs /c/).
+    # Search MSYS locations with NO_DEFAULT_PATH so we never pick chocolatey.
     find_program(Make_EXECUTABLE
-        NAMES make mingw32-make
+        NAMES make
         HINTS
             "C:/msys64/usr/bin"
             "C:/msys64/bin"
@@ -51,30 +54,34 @@ if(WIN32)
             "C:/tools/msys64/bin"
             "D:/msys64/usr/bin"
             "D:/msys64/bin"
+            "C:/msys2/usr/bin"
         NO_DEFAULT_PATH
     )
-    if(Make_EXECUTABLE AND NOT Make_EXECUTABLE MATCHES "msys64|MSYS")
-        # Found a non-MSYS make (e.g., chocolatey) via HINTS - ignore it
-        unset(Make_EXECUTABLE)
-        unset(Make_EXECUTABLE CACHE)
+    if(NOT Make_EXECUTABLE)
+        # One more try with mingw32-make name (some MSYS installs)
+        find_program(Make_EXECUTABLE
+            NAMES mingw32-make
+            HINTS
+                "C:/msys64/usr/bin"
+                "C:/msys64/mingw64/bin"
+            NO_DEFAULT_PATH
+        )
     endif()
     if(NOT Make_EXECUTABLE)
-        # Try PATH but ensure we don't pick chocolatey/MinGW that breaks MSYS paths
-        find_program(Make_EXECUTABLE make)
-        if(Make_EXECUTABLE MATCHES "chocolatey|Strawberry|GnuWin32|mingw32-make")
-            message(WARNING "Found non-MSYS make at '${Make_EXECUTABLE}' - this will break autotools. "
-                "Install MSYS2 make via 'pacman -S make' in MSYS2 shell and ensure C:/msys64/usr/bin is before chocolatey in PATH.")
-            unset(Make_EXECUTABLE)
-            unset(Make_EXECUTABLE CACHE)
-            find_program(Make_EXECUTABLE NAMES make HINTS "C:/msys64/usr/bin" NO_DEFAULT_PATH)
-        endif()
+        message(FATAL_ERROR
+            "MSYS2 make not found (looked in C:/msys64/usr/bin/make.exe, etc.).\n"
+            "  Install MSYS2 from https://www.msys2.org, then in MSYS2 shell run:\n"
+            "    pacman -S make base-devel autoconf automake libtool pkg-config\n"
+            "  Ensure C:/msys64/usr/bin is on PATH before chocolatey, or set\n"
+            "    -DMake_EXECUTABLE=C:/msys64/usr/bin/make.exe\n"
+            "  After installing, delete external/imagedecoder-houri/library/.cxx and re-sync Gradle.")
     endif()
 endif()
 if(NOT Make_EXECUTABLE)
     find_program(Make_EXECUTABLE make)
 endif()
-# On Windows, strictly require MSYS make; chocolatey/MinGW make breaks MSYS path handling (C:/ vs /c/)
-if(WIN32 AND Make_EXECUTABLE MATCHES "chocolatey|ProgramData")
+# Final guard: if we somehow still picked chocolatey, error
+if(Make_EXECUTABLE MATCHES "chocolatey|ProgramData")
     message(FATAL_ERROR
         "MSYS2 make is required on Windows but found '${Make_EXECUTABLE}'.\n"
         "  This is a non-MSYS make (chocolatey) that cannot handle MSYS Unix paths (/c/...).\n"
