@@ -19,26 +19,11 @@ find_program(Meson_EXECUTABLE
     PATH_SUFFIXES bin
 )
 if(NOT Meson_EXECUTABLE)
-    find_program(Python_EXECUTABLE NAMES python python3)
-    if(Python_EXECUTABLE)
-        execute_process(
-            COMMAND ${Python_EXECUTABLE} -m meson --version
-            RESULT_VARIABLE _meson_py_result
-            OUTPUT_QUIET ERROR_QUIET
-        )
-        if(_meson_py_result EQUAL 0)
-            set(Meson_EXECUTABLE "${Python_EXECUTABLE} -m meson" CACHE STRING "Meson via python -m meson" FORCE)
-        endif()
-    endif()
+    message(FATAL_ERROR "Meson is required (tried PATH and C:/Program Files/Meson/meson.exe; add Meson to PATH or set -DMeson_EXECUTABLE=...)")
 endif()
-if(NOT Meson_EXECUTABLE)
-    message(FATAL_ERROR "Meson is required (tried PATH and C:/Program Files/Meson/meson.exe and python -m meson; add Meson to PATH or set -DMeson_EXECUTABLE=...)")
-endif()
-
-# Autotools `configure` scripts need bash; use it explicitly on both Linux and Windows
-# so Windows (Git Bash / MSYS2) works via `bash configure` instead of `cmd.exe configure`.
-find_program(BASH_EXECUTABLE bash)
-if(NOT BASH_EXECUTABLE AND WIN32)
+# Autotools `configure` scripts need bash; prefer Git for Windows bash on Windows
+# over WSL's C:\Windows\System32\bash.exe (which expects /mnt/c/... paths).
+if(WIN32)
     find_program(BASH_EXECUTABLE bash
         HINTS
             "C:/Program Files/Git/usr/bin"
@@ -46,15 +31,39 @@ if(NOT BASH_EXECUTABLE AND WIN32)
             "C:/msys64/usr/bin"
             "C:/msys64/bin"
             "C:/tools/msys64/usr/bin"
+        NO_DEFAULT_PATH
     )
-endif()
-if(BASH_EXECUTABLE)
-    set(AUTOTOOLS_BASH_PREFIX "${BASH_EXECUTABLE}")
+    if(NOT BASH_EXECUTABLE)
+        find_program(BASH_EXECUTABLE bash)
+    endif()
 else()
-    set(AUTOTOOLS_BASH_PREFIX "")
+    find_program(BASH_EXECUTABLE bash)
+endif()
+if(NOT BASH_EXECUTABLE)
+    set(BASH_EXECUTABLE "bash")
+endif()
+set(AUTOTOOLS_BASH_PREFIX "${BASH_EXECUTABLE}")
+find_program(Ninja_EXECUTABLE NAMES ninja ninja.exe
+    HINTS
+        "C:/Program Files/Meson"
+        "$ENV{ProgramFiles}/Meson"
+        "$ENV{ANDROID_HOME}/cmake/3.22.1/bin"
+        "$ENV{ANDROID_SDK_ROOT}/cmake/3.22.1/bin"
+        "C:/Program Files/Ninja"
+        "$ENV{ProgramFiles}/Ninja"
+)
+if(Ninja_EXECUTABLE AND WIN32)
+    file(TO_NATIVE_PATH "${Ninja_EXECUTABLE}" _ninja_native)
+    set(Ninja_EXECUTABLE "${_ninja_native}")
 endif()
 
 set(THIRD_PARTY_LIB_PATH ${CMAKE_BINARY_DIR}/fakeroot)
+if(WIN32)
+    file(TO_NATIVE_PATH "${THIRD_PARTY_LIB_PATH}" _meson_prefix_native)
+    set(EP_MESON_PREFIX "${_meson_prefix_native}")
+else()
+    set(EP_MESON_PREFIX "${THIRD_PARTY_LIB_PATH}")
+endif()
 set(CMAKE_FIND_ROOT_PATH ${THIRD_PARTY_LIB_PATH};${CMAKE_FIND_ROOT_PATH})
 set_directory_properties(PROPERTIES EP_PREFIX ${THIRD_PARTY_LIB_PATH})
 
@@ -134,7 +143,7 @@ endif()
 
 # Common args to all Mason ExternalProjects
 set(EP_MESON_ARGS "--cross-file=${MESON_CROSS_FILE_PATH}"
-    "--prefix=<INSTALL_DIR>"
+    "--prefix=${EP_MESON_PREFIX}"
     "--libdir=lib"
     "--default-library=static"
     "--buildtype=release"
@@ -161,6 +170,9 @@ set(EP_CMAKE_ARGS
     "-DCMAKE_C_LINKER_LAUNCHER=${CMAKE_C_LINKER_LAUNCHER}"
     "-DCMAKE_BUILD_PARALLEL_LEVEL=${NPROC}"
 )
+if(Ninja_EXECUTABLE)
+    list(APPEND EP_CMAKE_ARGS "-DCMAKE_MAKE_PROGRAM=${Ninja_EXECUTABLE}")
+endif()
 
 set(EP_AUTOTOOLS_ARGS
     "--host=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
