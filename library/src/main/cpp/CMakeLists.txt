@@ -193,20 +193,24 @@ endif()
 if(WIN32)
     # MSYS2 bash expects Unix-style /c/... for absolute paths with drive letters,
     # otherwise `CC=C:/...` is parsed as variable `C` with value `:/...` and next arg `0` from `C:` split.
+    # Handle both C:/ and c:/ and also C:\ after TO_CMAKE_PATH.
     file(TO_CMAKE_PATH "${CMAKE_C_COMPILER}" _cc_tmp)
-    string(REGEX REPLACE "^C:/" "/c/" _cc_msys "${_cc_tmp}")
+    string(REGEX REPLACE "^[Cc]:/" "/c/" _cc_msys "${_cc_tmp}")
     file(TO_CMAKE_PATH "${CMAKE_CXX_COMPILER}" _cxx_tmp)
-    string(REGEX REPLACE "^C:/" "/c/" _cxx_msys "${_cxx_tmp}")
+    string(REGEX REPLACE "^[Cc]:/" "/c/" _cxx_msys "${_cxx_tmp}")
     file(TO_CMAKE_PATH "${CMAKE_AR}" _ar_tmp)
-    string(REGEX REPLACE "^C:/" "/c/" _ar_msys "${_ar_tmp}")
+    string(REGEX REPLACE "^[Cc]:/" "/c/" _ar_msys "${_ar_tmp}")
     file(TO_CMAKE_PATH "${CMAKE_LINKER}" _ld_tmp)
-    string(REGEX REPLACE "^C:/" "/c/" _ld_msys "${_ld_tmp}")
+    string(REGEX REPLACE "^[Cc]:/" "/c/" _ld_msys "${_ld_tmp}")
     file(TO_CMAKE_PATH "${CMAKE_RANLIB}" _ranlib_tmp)
-    string(REGEX REPLACE "^C:/" "/c/" _ranlib_msys "${_ranlib_tmp}")
+    string(REGEX REPLACE "^[Cc]:/" "/c/" _ranlib_msys "${_ranlib_tmp}")
     file(TO_CMAKE_PATH "${CMAKE_STRIP}" _strip_tmp)
-    string(REGEX REPLACE "^C:/" "/c/" _strip_msys "${_strip_tmp}")
+    string(REGEX REPLACE "^[Cc]:/" "/c/" _strip_msys "${_strip_tmp}")
     file(TO_CMAKE_PATH "${THIRD_PARTY_LIB_PATH}" _prefix_msys)
-    string(REGEX REPLACE "^C:/" "/c/" _prefix_msys "${_prefix_msys}")
+    string(REGEX REPLACE "^[Cc]:/" "/c/" _prefix_msys "${_prefix_msys}")
+    message(STATUS "WIN32 MSYS2 CC: ${CMAKE_C_COMPILER} -> ${_cc_msys}")
+    message(STATUS "WIN32 MSYS2 AR: ${CMAKE_AR} -> ${_ar_msys}")
+    message(STATUS "WIN32 MSYS2 PREFIX: ${THIRD_PARTY_LIB_PATH} -> ${_prefix_msys}")
     set(EP_AUTOTOOLS_ARGS
         "--host=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
         "CC=${_cc_msys}"
