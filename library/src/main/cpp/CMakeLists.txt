@@ -495,6 +495,24 @@ set(_cross_pkg_both "'${_cross_pkg}', '${_cross_pkg_wsl}'")
 # Use both for pkg_config_path; pkg_config_libdir is single but we can list both via colon
 set(_cross_pkg_libdir_both "${_cross_pkg}:${_cross_pkg_wsl}")
 
+if(IS_HOST_WINDOWS)
+  # For wsl meson, use /mnt/c/... Unix paths for compilers (C:/ not found inside WSL)
+  set(_cross_c "${_cc_msys}")
+  set(_cross_cpp "${_cxx_msys}")
+  set(_cross_ar "${_ar_msys}")
+  set(_cross_ld "${_ld_msys}")
+  set(_cross_strip "${_strip_msys}")
+  set(_cross_ranlib "${_ranlib_msys}")
+  set(_cross_as "${_as_msys}")
+else()
+  set(_cross_c "${CMAKE_C_COMPILER}")
+  set(_cross_cpp "${CMAKE_CXX_COMPILER}")
+  set(_cross_ar "${CMAKE_AR}")
+  set(_cross_ld "${CMAKE_LINKER}")
+  set(_cross_strip "${CMAKE_STRIP}")
+  set(_cross_ranlib "${CMAKE_RANLIB}")
+  set(_cross_as "${CMAKE_ASM_COMPILER}")
+endif()
 set(CROSS_FILE_CONTENT "
 [host_machine]
 system = 'android'
@@ -503,13 +521,13 @@ cpu = '${ANDROID_CPU}'
 endian = '${ANDROID_CPU_ENDIANESS}'
 
 [binaries]
-c = ['${CMAKE_C_COMPILER}', '--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}']
-cpp = ['${CMAKE_CXX_COMPILER}', '--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}']
-ar = '${CMAKE_AR}'
-ld = '${CMAKE_LINKER}'
-strip = '${CMAKE_STRIP}'
-ranlib = '${CMAKE_RANLIB}'
-as = '${CMAKE_ASM_COMPILER}'
+c = ['${_cross_c}', '--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}']
+cpp = ['${_cross_cpp}', '--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}']
+ar = '${_cross_ar}'
+ld = '${_cross_ld}'
+strip = '${_cross_strip}'
+ranlib = '${_cross_ranlib}'
+as = '${_cross_as}'
 pkg-config = 'pkg-config'
 
 [built-in options]
