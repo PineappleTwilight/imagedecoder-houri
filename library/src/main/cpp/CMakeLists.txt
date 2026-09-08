@@ -780,7 +780,20 @@ endif()
 # Meson helper for WSL: converts Windows C:/ paths to /mnt/c/ via wslpath before invoking meson
 # Needed because ExternalProject's <BINARY_DIR>/<SOURCE_DIR> and --cross-file are C:/ on Windows host but wsl meson needs /mnt/c/
 set(MESON_HELPER "${CMAKE_BINARY_DIR}/meson_helper.sh")
-file(WRITE "${MESON_HELPER}" "#!/usr/bin/env bash\nset -e\n# Convert any C:/... args to /mnt/c/... via wslpath\nargs=()\nfor a in \"$@\"; do\n  if [[ \"$a\" == *\":/\"* ]] || [[ \"$a\" == \"C:\"* ]] || [[ \"$a\" =~ ^[A-Za-z]:/ ]]; then\n    if command -v wslpath >/dev/null 2>&1; then a=$(wslpath -u \"$a\" 2>/dev/null || echo \"$a\"); elif command -v cygpath >/dev/null 2>&1; then a=$(cygpath -u \"$a\" 2>/dev/null || echo \"$a\"); fi\n  fi\n  # Also handle --cross-file=C:/... and --prefix=/mnt/c/... already Unix, but --cross-file may be C:/\n  if [[ \"$a\" == --cross-file=* ]]; then cf=\"${a#--cross-file=}\"; if [[ \"$cf\" =~ ^[A-Za-z]:/ ]]; then if command -v wslpath >/dev/null 2>&1; then cf=$(wslpath -u \"$cf\" 2>/dev/null || echo \"$cf\"); elif command -v cygpath >/dev/null 2>&1; then cf=$(cygpath -u \"$cf\" 2>/dev/null || echo \"$cf\"); fi; a=\"--cross-file=$cf\"; fi; fi\n  args+=(\"$a\")\ndone\nexec /usr/bin/meson \"${args[@]}\"\n")
+file(WRITE "${MESON_HELPER}" [=[#!/usr/bin/env bash
+set -e
+# Convert any C:/... args to /mnt/c/... via wslpath
+args=()
+for a in "$@"; do
+  if [[ "$a" == *":/"* ]] || [[ "$a" == "C:"* ]] || [[ "$a" =~ ^[A-Za-z]:/ ]]; then
+    if command -v wslpath >/dev/null 2>&1; then a=$(wslpath -u "$a" 2>/dev/null || echo "$a"); elif command -v cygpath >/dev/null 2>&1; then a=$(cygpath -u "$a" 2>/dev/null || echo "$a"); fi
+  fi
+  # Also handle --cross-file=C:/...
+  if [[ "$a" == --cross-file=* ]]; then cf="${a#--cross-file=}"; if [[ "$cf" =~ ^[A-Za-z]:/ ]]; then if command -v wslpath >/dev/null 2>&1; then cf=$(wslpath -u "$cf" 2>/dev/null || echo "$cf"); elif command -v cygpath >/dev/null 2>&1; then cf=$(cygpath -u "$cf" 2>/dev/null || echo "$cf"); fi; a="--cross-file=$cf"; fi; fi
+  args+=("$a")
+done
+exec /usr/bin/meson "${args[@]}"
+]=])
 execute_process(COMMAND ${CMAKE_COMMAND} -E chmod +x "${MESON_HELPER}")
 to_msys_path("${MESON_HELPER}" MESON_HELPER_MSYS)
 if(IS_HOST_WINDOWS)
