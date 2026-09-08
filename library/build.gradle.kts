@@ -1,3 +1,5 @@
+import java.util.concurrent.TimeUnit
+
 plugins {
     alias(libs.plugins.android.library)
     id("com.vanniktech.maven.publish") version "0.36.0"
@@ -38,7 +40,7 @@ android {
                     val wslFoundViaExec = try {
                         val proc = ProcessBuilder("wsl", "--status")
                             .redirectErrorStream(true).start()
-                        proc.waitFor(8, java.util.concurrent.TimeUnit.SECONDS)
+                        proc.waitFor(8, TimeUnit.SECONDS)
                         wslFoundViaFile || proc.exitValue() == 0
                     } catch (_: Exception) {
                         wslFoundViaFile
