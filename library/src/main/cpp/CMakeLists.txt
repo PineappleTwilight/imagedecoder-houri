@@ -535,6 +535,15 @@ CMAKE_FIND_ROOT_PATH_MODE_PACKAGE = 'ONLY'
 set(MESON_CROSS_FILE_PATH "${CMAKE_BINARY_DIR}/android-cross-file.txt")
 file(WRITE ${MESON_CROSS_FILE_PATH} "${CROSS_FILE_CONTENT}")
 message(STATUS "Wrote Meson cross file: ${MESON_CROSS_FILE_PATH}")
+# For WSL, meson needs Unix /mnt/c/... path, not C:/...
+to_msys_path("${MESON_CROSS_FILE_PATH}" MESON_CROSS_FILE_PATH_WSL)
+# Fix CRLF for cross file (file(WRITE) on Windows writes CRLF)
+if(IS_HOST_WINDOWS)
+  execute_process(COMMAND ${WSL_EXECUTABLE} bash -c "tr -d '\\015' < \"${MESON_CROSS_FILE_PATH_WSL}\" > \"${MESON_CROSS_FILE_PATH_WSL}.tmp\" && mv \"${MESON_CROSS_FILE_PATH_WSL}.tmp\" \"${MESON_CROSS_FILE_PATH_WSL}\" || true" ERROR_QUIET)
+  execute_process(COMMAND ${WSL_EXECUTABLE} bash -c "tr -d '\\015' < \"${MESON_CROSS_FILE_PATH}\" > \"${MESON_CROSS_FILE_PATH}.tmp\" && mv \"${MESON_CROSS_FILE_PATH}.tmp\" \"${MESON_CROSS_FILE_PATH}\" || true" ERROR_QUIET)
+else()
+  execute_process(COMMAND bash -c "tr -d '\\015' < \"${MESON_CROSS_FILE_PATH}\" > \"${MESON_CROSS_FILE_PATH}.tmp\" && mv \"${MESON_CROSS_FILE_PATH}.tmp\" \"${MESON_CROSS_FILE_PATH}\" || true" ERROR_QUIET)
+endif()
 
 # Detect CPU count for parallel builds
 include(ProcessorCount)
@@ -544,13 +553,23 @@ if(NPROC EQUAL 0)
 endif()
 
 # Common args to all Meson ExternalProjects
-# Note: --prefix must be Unix (/c/...) on WIN32 cross-builds (host=android).
-set(EP_MESON_ARGS "--cross-file=${MESON_CROSS_FILE_PATH}"
-    "--prefix=${EP_MESON_PREFIX}"
-    "--libdir=lib"
-    "--default-library=static"
-    "--buildtype=release"
-)
+# Note: --prefix must be Unix (/mnt/c/...) on WIN32 cross-builds (host=android).
+# For WSL, --cross-file must also be /mnt/c/... (not C:/...)
+if(IS_HOST_WINDOWS)
+  set(EP_MESON_ARGS "--cross-file=${MESON_CROSS_FILE_PATH_WSL}"
+      "--prefix=${EP_MESON_PREFIX}"
+      "--libdir=lib"
+      "--default-library=static"
+      "--buildtype=release"
+  )
+else()
+  set(EP_MESON_ARGS "--cross-file=${MESON_CROSS_FILE_PATH}"
+      "--prefix=${EP_MESON_PREFIX}"
+      "--libdir=lib"
+      "--default-library=static"
+      "--buildtype=release"
+  )
+endif()
 
 # Escape ';'
 string(REPLACE ";" "$<SEMICOLON>" CMAKE_FIND_ROOT_PATH_STR "${CMAKE_FIND_ROOT_PATH}")
@@ -756,6 +775,19 @@ if(IS_HOST_WINDOWS)
   execute_process(COMMAND ${WSL_EXECUTABLE} bash -c "tr -d '\\015' < \"${INSTALL_ICONV_HELPER_MSYS}\" > \"${INSTALL_ICONV_HELPER_MSYS}.tmp\" && mv \"${INSTALL_ICONV_HELPER_MSYS}.tmp\" \"${INSTALL_ICONV_HELPER_MSYS}\" || true" ERROR_QUIET)
 else()
   execute_process(COMMAND bash -c "tr -d '\\015' < \"${INSTALL_ICONV_HELPER}\" > \"${INSTALL_ICONV_HELPER}.tmp\" && mv \"${INSTALL_ICONV_HELPER}.tmp\" \"${INSTALL_ICONV_HELPER}\" || true" ERROR_QUIET)
+endif()
+
+# Meson helper for WSL: converts Windows C:/ paths to /mnt/c/ via wslpath before invoking meson
+# Needed because ExternalProject's <BINARY_DIR>/<SOURCE_DIR> and --cross-file are C:/ on Windows host but wsl meson needs /mnt/c/
+set(MESON_HELPER "${CMAKE_BINARY_DIR}/meson_helper.sh")
+file(WRITE "${MESON_HELPER}" "#!/usr/bin/env bash\nset -e\n# Convert any C:/... args to /mnt/c/... via wslpath\nargs=()\nfor a in \"$@\"; do\n  if [[ \"$a\" == *\":/\"* ]] || [[ \"$a\" == \"C:\"* ]] || [[ \"$a\" =~ ^[A-Za-z]:/ ]]; then\n    if command -v wslpath >/dev/null 2>&1; then a=$(wslpath -u \"$a\" 2>/dev/null || echo \"$a\"); elif command -v cygpath >/dev/null 2>&1; then a=$(cygpath -u \"$a\" 2>/dev/null || echo \"$a\"); fi\n  fi\n  # Also handle --cross-file=C:/... and --prefix=/mnt/c/... already Unix, but --cross-file may be C:/\n  if [[ \"$a\" == --cross-file=* ]]; then cf=\"${a#--cross-file=}\"; if [[ \"$cf\" =~ ^[A-Za-z]:/ ]]; then if command -v wslpath >/dev/null 2>&1; then cf=$(wslpath -u \"$cf\" 2>/dev/null || echo \"$cf\"); elif command -v cygpath >/dev/null 2>&1; then cf=$(cygpath -u \"$cf\" 2>/dev/null || echo \"$cf\"); fi; a=\"--cross-file=$cf\"; fi; fi\n  args+=(\"$a\")\ndone\nexec /usr/bin/meson \"${args[@]}\"\n")
+execute_process(COMMAND ${CMAKE_COMMAND} -E chmod +x "${MESON_HELPER}")
+to_msys_path("${MESON_HELPER}" MESON_HELPER_MSYS)
+if(IS_HOST_WINDOWS)
+  execute_process(COMMAND ${WSL_EXECUTABLE} bash -c "tr -d '\\015' < \"${MESON_HELPER}\" > \"${MESON_HELPER}.tmp\" && mv \"${MESON_HELPER}.tmp\" \"${MESON_HELPER}\" || true" ERROR_QUIET)
+  execute_process(COMMAND ${WSL_EXECUTABLE} bash -c "tr -d '\\015' < \"${MESON_HELPER_MSYS}\" > \"${MESON_HELPER_MSYS}.tmp\" && mv \"${MESON_HELPER_MSYS}.tmp\" \"${MESON_HELPER_MSYS}\" || true" ERROR_QUIET)
+else()
+  execute_process(COMMAND bash -c "tr -d '\\015' < \"${MESON_HELPER}\" > \"${MESON_HELPER}.tmp\" && mv \"${MESON_HELPER}.tmp\" \"${MESON_HELPER}\" || true" ERROR_QUIET)
 endif()
 
 include("cmake/zlib.cmake")
