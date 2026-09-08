@@ -20,13 +20,13 @@ ExternalProject_Add(ep_libiconv
     # spurious git-update attempts for URL projects.
     UPDATE_COMMAND ""
     PATCH_COMMAND
-        "${BASH_EXECUTABLE}" "${PATCH_ICONV_HELPER_MSYS}" "<SOURCE_DIR>"
+        ${BASH_CMD} "${PATCH_ICONV_HELPER_MSYS}" "<SOURCE_DIR>"
     CONFIGURE_COMMAND
         ${CMAKE_COMMAND} -E env "CC=${_cc_msys}" "CFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}" "CXX=${_cxx_msys}" "CXXFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}" "AR=${_ar_msys}" "LD=${_ld_msys}" "RANLIB=${_ranlib_msys}" "STRIP=${_strip_msys}" "gl_cv_func_nl_langinfo_codeset=no" "am_cv_langinfo_codeset=no"
-        "${BASH_EXECUTABLE}" "${CONFIGURE_ICONV_HELPER_MSYS}" "<SOURCE_DIR>" "${EP_AUTOTOOLS_PREFIX}" "${ANDROID_TARGET}"
+        ${BASH_CMD} "${CONFIGURE_ICONV_HELPER_MSYS}" "<SOURCE_DIR>" "${EP_AUTOTOOLS_PREFIX}" "${ANDROID_TARGET}"
     BUILD_COMMAND
         ${CMAKE_COMMAND} -E env "CC=${_cc_msys}" "CFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}" "CXX=${_cxx_msys}" "CXXFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}" "AR=${_ar_msys}" "LD=${_ld_msys}" "RANLIB=${_ranlib_msys}" "STRIP=${_strip_msys}"
-        "${BASH_EXECUTABLE}" "${AUTOTOOLS_HELPER_MSYS}" "<SOURCE_DIR>" make -j1 V=1
+        ${BASH_CMD} "${AUTOTOOLS_HELPER_MSYS}" "<SOURCE_DIR>" make -j1 V=1
     INSTALL_COMMAND
-        "${BASH_EXECUTABLE}" "${INSTALL_ICONV_HELPER_MSYS}" "<SOURCE_DIR>" "${EP_AUTOTOOLS_PREFIX}"
+        ${BASH_CMD} "${INSTALL_ICONV_HELPER_MSYS}" "<SOURCE_DIR>" "${EP_AUTOTOOLS_PREFIX}"
 )

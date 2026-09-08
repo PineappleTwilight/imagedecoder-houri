@@ -6,7 +6,7 @@ ExternalProject_Add(ep_glib
     DEPENDS ep_zlib ep_libffi ep_libiconv
     CONFIGURE_COMMAND
         ${CMAKE_COMMAND} -E env "MSYS_NO_PATHCONV=1" "NINJA=${Ninja_EXECUTABLE}" "PKG_CONFIG_PATH=${_cross_pkg}:${_cross_pkg_wsl}" "PKG_CONFIG_LIBDIR=${_cross_pkg}:${_cross_pkg_wsl}" "BASH_COMPLETION_COMPLETIONSDIR="
-        ${Meson_EXECUTABLE} setup
+        ${Meson_EXECUTABLE} $<$<BOOL:${MESON_VIA_WSL}>:${MESON_WSL_CMD}> setup
         ${EP_MESON_ARGS}
         -Dtests=false
         -Dman-pages=disabled
@@ -18,7 +18,8 @@ ExternalProject_Add(ep_glib
         -Ddtrace=disabled
         -Dsystemtap=disabled
         -Dsysprof=disabled
+        -Db_lto=false
         <BINARY_DIR> <SOURCE_DIR>
-    BUILD_COMMAND ${Meson_EXECUTABLE} compile -j ${NPROC} -C <BINARY_DIR>
-    INSTALL_COMMAND ${Meson_EXECUTABLE} install -C <BINARY_DIR>
+    BUILD_COMMAND ${Meson_EXECUTABLE} $<$<BOOL:${MESON_VIA_WSL}>:${MESON_WSL_CMD}> compile -j ${NPROC} -C <BINARY_DIR>
+    INSTALL_COMMAND ${Meson_EXECUTABLE} $<$<BOOL:${MESON_VIA_WSL}>:${MESON_WSL_CMD}> install -C <BINARY_DIR>
 )

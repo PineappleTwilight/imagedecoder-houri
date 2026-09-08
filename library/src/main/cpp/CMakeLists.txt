@@ -8,6 +8,26 @@ endif()
 project("imagedecoder_s")
 
 # ---------------------------------------------------------------------------
+# WSL interop: If we're on Windows and WSL is available, prefer WSL's Linux
+# tools (meson 1.7.0, pkg-config, bash, make) over Windows binaries
+# (meson.exe 1.12.0, msys64 pkg-config) to avoid C:/ vs /c/ vs C:\ path
+# style bugs that trigger Meson 1.12.0 declare_dependency is_parent_path
+# assert at gio/meson.build:925 with iconv variables.
+# ---------------------------------------------------------------------------
+if(WIN32)
+  find_program(WSL_EXECUTABLE wsl NO_CACHE)
+  if(WSL_EXECUTABLE)
+    execute_process(COMMAND ${WSL_EXECUTABLE} --status OUTPUT_VARIABLE _wsl_status ERROR_QUIET)
+    # wsl --status returns 0 if WSL is available, but we just check existence
+    message(STATUS "WSL detected at ${WSL_EXECUTABLE} - will use WSL Linux tools when possible")
+    set(USE_WSL_TOOLS TRUE)
+    # Helper to run a command via WSL: wsl <cmd> <args>
+    # For meson, we want "wsl meson" not "C:/Program Files/Meson/meson.exe"
+    find_program(WSL_MESON wsl_meson_helper NO_CACHE) # dummy to avoid re-search
+  endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Helper: Convert a Windows absolute path (C:/foo or C:\foo) to Unix path
 # Handles both MSYS (/c/foo) and WSL (/mnt/c/foo). Detects WSL via
 # /proc/version so that Windows cmake + WSL bash interop uses /mnt/c/.
@@ -141,29 +161,43 @@ endif()
 message(STATUS "Using Make: ${Make_EXECUTABLE}")
 
 # ---------------------------------------------------------------------------
-# Tool detection: Meson
+# Tool detection: Meson — use WSL's Linux meson (1.7.0) when on Windows + WSL
+# to avoid Windows meson.exe 1.12.0 C:/ vs C:\ is_parent_path assert at
+# gio/meson.build:925 declare_dependency with C:/ prefix variables.
 # ---------------------------------------------------------------------------
-find_program(Meson_EXECUTABLE
-    NAMES meson meson.exe meson.py
-    HINTS
-        "C:/Program Files/Meson"
-        "$ENV{ProgramFiles}/Meson"
-        "$ENV{ProgramW6432}/Meson"
-        "$ENV{LOCALAPPDATA}/Programs/Meson"
-        "$ENV{USERPROFILE}/AppData/Local/Programs/Meson"
-        "C:/Program Files (x86)/Meson"
-        "C:/msys64/usr/bin"
-        "C:/msys64/mingw64/bin"
-        "C:/tools/msys64/usr/bin"
-    PATH_SUFFIXES bin
-)
-if(NOT Meson_EXECUTABLE)
-    message(FATAL_ERROR
-        "Meson is required (tried PATH and C:/Program Files/Meson/meson.exe).\n"
-        "  Install: pip install meson  OR  pacman -S meson  (MSYS64)\n"
-        "  Or add Meson to PATH or set -DMeson_EXECUTABLE=...")
+if(USE_WSL_TOOLS)
+  # WSL's meson is /usr/bin/meson (Linux) which correctly handles /mnt/c/
+  # and doesn't have the Windows C:/ declare_dependency bug. We invoke it
+  # via "wsl meson" from Windows cmake.
+  find_program(WSL_MESON_PATH meson PATHS /usr/bin NO_CACHE)
+  # Fallback: wsl will find it via PATH
+  set(Meson_EXECUTABLE "wsl" CACHE FILEPATH "WSL Meson wrapper" FORCE)
+  set(MESON_VIA_WSL TRUE)
+  set(MESON_WSL_CMD "meson")
+  message(STATUS "Using WSL Meson: wsl meson (avoids Windows C:/ bug)")
+else()
+  find_program(Meson_EXECUTABLE
+      NAMES meson meson.exe meson.py
+      HINTS
+          "C:/Program Files/Meson"
+          "$ENV{ProgramFiles}/Meson"
+          "$ENV{ProgramW6432}/Meson"
+          "$ENV{LOCALAPPDATA}/Programs/Meson"
+          "$ENV{USERPROFILE}/AppData/Local/Programs/Meson"
+          "C:/Program Files (x86)/Meson"
+          "C:/msys64/usr/bin"
+          "C:/msys64/mingw64/bin"
+          "C:/tools/msys64/usr/bin"
+      PATH_SUFFIXES bin
+  )
+  if(NOT Meson_EXECUTABLE)
+      message(FATAL_ERROR
+          "Meson is required (tried PATH and C:/Program Files/Meson/meson.exe).\n"
+          "  Install: pip install meson  OR  pacman -S meson  (MSYS64)\n"
+          "  Or add Meson to PATH or set -DMeson_EXECUTABLE=...")
+  endif()
+  message(STATUS "Using Meson: ${Meson_EXECUTABLE}")
 endif()
-message(STATUS "Using Meson: ${Meson_EXECUTABLE}")
 
 # ---------------------------------------------------------------------------
 # Tool detection: Bash (critical for autotools on Windows)
@@ -171,8 +205,15 @@ message(STATUS "Using Meson: ${Meson_EXECUTABLE}")
 # probe both. We also honour $MSYS2_ROOT / $MSYSTEM env hints.
 # WSL's C:\\Windows\\System32\\bash.exe uses /mnt/c/... paths and MUST be
 # avoided – it breaks autotools path handling.
+# If USE_WSL_TOOLS, use WSL's Linux bash (wsl bash) instead of MSYS bash
+# to avoid C:/ vs /c/ vs C:\ path style bugs with Meson 1.12.0.
 # ---------------------------------------------------------------------------
-if(WIN32)
+if(USE_WSL_TOOLS)
+  set(BASH_EXECUTABLE "wsl" CACHE FILEPATH "WSL Bash" FORCE)
+  set(BASH_VIA_WSL TRUE)
+  set(BASH_WSL_CMD "bash")
+  message(STATUS "Using WSL Bash: wsl bash (avoids Windows C:/ bugs)")
+elseif(WIN32)
     # Honour explicit env var if user set MSYS2 location
     if(DEFINED ENV{MSYS2_ROOT} AND EXISTS "$ENV{MSYS2_ROOT}/usr/bin/bash.exe")
         set(_msys_hint_bash "$ENV{MSYS2_ROOT}/usr/bin/bash.exe")
@@ -224,8 +265,14 @@ endif()
 if(NOT BASH_EXECUTABLE)
     set(BASH_EXECUTABLE "bash")
 endif()
+# For WSL, BASH_EXECUTABLE is "wsl" and we need to invoke "wsl bash"
+if(BASH_VIA_WSL)
+  set(BASH_CMD "${BASH_EXECUTABLE};${BASH_WSL_CMD}")
+else()
+  set(BASH_CMD "${BASH_EXECUTABLE}")
+endif()
 set(AUTOTOOLS_BASH_PREFIX "${BASH_EXECUTABLE}")
-message(STATUS "Using BASH for autotools: ${BASH_EXECUTABLE}")
+message(STATUS "Using BASH for autotools: ${BASH_EXECUTABLE} ${BASH_WSL_CMD}")
 
 # ---------------------------------------------------------------------------
 # Windows MSYS2 sanity checks: autoreconf / autoconf / automake / libtool
