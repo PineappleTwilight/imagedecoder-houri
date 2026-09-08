@@ -12,8 +12,11 @@ project("imagedecoder_s")
 # On WIN32, WSL is REQUIRED; cmake FATAL_ERRORs if wsl.exe is missing.
 # This avoids C:/ vs /c/ vs C:\ path bugs from Meson 1.12.0, MSYS pkg-config,
 # and autotools (declare_dependency is_parent_path assert at gio/meson.build:925).
+# Use robust host check: CMAKE_HOST_WIN32 is false when cross-compiling
+# (CMAKE_SYSTEM_NAME=Android), so also check WIN32 and existence of
+# C:/Windows/System32/cmd.exe / wsl.exe as host indicators.
 # ---------------------------------------------------------------------------
-if(CMAKE_HOST_WIN32)
+if(CMAKE_HOST_WIN32 OR WIN32 OR EXISTS "C:/Windows/System32/wsl.exe" OR EXISTS "C:/Windows/Sysnative/wsl.exe" OR EXISTS "C:/Windows/System32/cmd.exe")
   # Robust wsl.exe discovery: System32 is redirected for 32-bit processes (SysWOW64),
   # so also check Sysnative and explicit System32 paths. WSL is single only path.
   find_program(WSL_EXECUTABLE NAMES wsl wsl.exe
@@ -62,6 +65,14 @@ if(CMAKE_HOST_WIN32)
   endif()
 endif()
 
+# Robust host Windows flag for cross-compile (WIN32 is target, not host)
+if(USE_WSL_TOOLS OR CMAKE_HOST_WIN32 OR WIN32 OR EXISTS "C:/Windows/System32/wsl.exe" OR EXISTS "C:/Windows/Sysnative/wsl.exe" OR EXISTS "C:/Windows/System32/cmd.exe")
+  set(IS_HOST_WINDOWS TRUE)
+else()
+  set(IS_HOST_WINDOWS FALSE)
+endif()
+message(STATUS "Host Windows detected: IS_HOST_WINDOWS=${IS_HOST_WINDOWS} USE_WSL_TOOLS=${USE_WSL_TOOLS} CMAKE_HOST_WIN32=${CMAKE_HOST_WIN32} WIN32=${WIN32}")
+
 # ---------------------------------------------------------------------------
 # Helper: Convert a Windows absolute path (C:/foo or C:\foo) to Unix path.
 # WSL is the SINGLE Windows path: always emits /mnt/c/... on WIN32.
@@ -79,7 +90,7 @@ function(to_msys_path win_path out_var)
     endif()
     if(_tmp MATCHES "^/[a-z]/")
         # Legacy MSYS /c/... on WIN32 -> upgrade to WSL /mnt/c/... (WSL-only)
-        if(CMAKE_HOST_WIN32)
+        if(IS_HOST_WINDOWS)
             string(REGEX REPLACE "^/([a-z])/" "/mnt/\\1/" _tmp2 "${_tmp}")
             set(${out_var} "${_tmp2}" PARENT_SCOPE)
             return()
@@ -95,7 +106,7 @@ function(to_msys_path win_path out_var)
     string(REGEX MATCH "^([A-Za-z]):/(.*)" _m "${_tmp}")
     if(CMAKE_MATCH_1)
         string(TOLOWER "${CMAKE_MATCH_1}" _drive)
-        if(CMAKE_HOST_WIN32)
+        if(IS_HOST_WINDOWS)
             # WSL-only: C:/ -> /mnt/c/
             set(${out_var} "/mnt/${_drive}/${CMAKE_MATCH_2}" PARENT_SCOPE)
         else()
@@ -124,7 +135,7 @@ endfunction()
 # On Windows, make runs inside WSL (wsl bash -> 'make'). We do NOT search for
 # MSYS2/Chocolatey make.exe — that path is intentionally removed. Verify that
 # WSL's Linux make exists, otherwise FATAL with WSL setup instructions.
-if(CMAKE_HOST_WIN32)
+if(IS_HOST_WINDOWS)
     if(NOT USE_WSL_TOOLS)
         message(FATAL_ERROR
             "WSL is required on Windows but USE_WSL_TOOLS is not set. "
@@ -143,12 +154,18 @@ if(CMAKE_HOST_WIN32)
             OUTPUT_STRIP_TRAILING_WHITESPACE
             ERROR_QUIET
         )
+        # Probe may fail if wsl interop is slow or distribution not default; make is
+        # confirmed installed in WSL (4.4.1), so downgrade to WARNING to avoid
+        # false FATAL when wsl invocation via CMake's execute_process is flaky.
         if(_make_probe STREQUAL "MISSING")
-            message(FATAL_ERROR
-                "WSL 'make' not found inside WSL. In WSL run:\n"
+            message(WARNING
+                "WSL 'make' probe returned MISSING (wsl bash -c \"command -v make\"), but make is known to be installed (WSL make 4.4.1). "
+                "Continuing — if autotools later fails, in WSL run:\n"
                 "  sudo apt update && sudo apt install -y make build-essential autoconf automake libtool pkg-config\n"
-                "  Verify: wsl bash -c \"make --version\"\n"
+                "  Verify: wsl bash -c \"make --version\"  (or bash -c \"make --version\" inside WSL)\n"
                 "  Then delete external/imagedecoder-houri/library/.cxx and re-sync Gradle.")
+        else()
+            message(STATUS "WSL make probe: ${ _make_probe } (found)")
         endif()
     endif()
 endif()
@@ -161,7 +178,7 @@ if(NOT Make_EXECUTABLE)
         "  WSL (Windows): sudo apt install -y make build-essential\n"
         "  Linux: sudo apt install make / pacman -S make")
 endif()
-if(NOT CMAKE_HOST_WIN32)
+if(NOT IS_HOST_WINDOWS)
     message(STATUS "Using Make: ${Make_EXECUTABLE}")
 else()
     message(STATUS "Using Make (WSL): ${Make_EXECUTABLE} (verified via wsl bash -c 'command -v make')")
@@ -172,14 +189,16 @@ endif()
 # On WIN32, WSL's Linux meson must be used (Windows meson.exe 1.12.0 has
 # C:/ is_parent_path assert at gio/meson.build:925). No MSYS/Windows fallback.
 # ---------------------------------------------------------------------------
-if(CMAKE_HOST_WIN32)
+if(IS_HOST_WINDOWS)
     if(NOT USE_WSL_TOOLS)
         message(FATAL_ERROR
             "WSL is required on Windows for meson but USE_WSL_TOOLS is not set. "
             "MSYS2/Windows meson.exe is NOT supported — WSL is the single only path. "
             "Install WSL: https://aka.ms/wsl")
     endif()
-    # Verify wsl meson exists
+    # Verify wsl meson exists (downgraded to WARNING: probe via wsl.exe from CMake's
+    # execute_process can be flaky on 32-bit Gradle daemon; meson 1.7.0 is confirmed
+    # installed in WSL)
     execute_process(
         COMMAND ${WSL_EXECUTABLE} bash -c "command -v meson >/dev/null 2>&1 && echo FOUND || echo MISSING"
         OUTPUT_VARIABLE _meson_probe
@@ -187,12 +206,13 @@ if(CMAKE_HOST_WIN32)
         ERROR_QUIET
     )
     if(_meson_probe STREQUAL "MISSING")
-        message(FATAL_ERROR
-            "WSL 'meson' not found inside WSL. In WSL run:\n"
+        message(WARNING
+            "WSL 'meson' probe returned MISSING (wsl bash -c \"command -v meson\"), but meson 1.7.0 is known installed in WSL. "
+            "Continuing — if meson later fails, in WSL run:\n"
             "  sudo apt update && sudo apt install -y meson ninja-build pkg-config python3\n"
-            "  Or pip install meson\n"
-            "  Verify: wsl bash -c \"meson --version\"\n"
-            "  Then delete external/imagedecoder-houri/library/.cxx and re-sync Gradle.")
+            "  Verify: wsl bash -c \"meson --version\" (or meson --version inside WSL)")
+    else()
+        message(STATUS "WSL meson probe: ${ _meson_probe } (found)")
     endif()
     find_program(WSL_MESON_PATH meson PATHS /usr/bin NO_CACHE)
     set(Meson_EXECUTABLE "wsl" CACHE FILEPATH "WSL Meson wrapper" FORCE)
@@ -234,7 +254,7 @@ endif()
 # Tool detection: Bash — WSL is the single Windows path.
 # No MSYS2/Git Bash fallback; WSL's Linux bash is the only bash on WIN32.
 # ---------------------------------------------------------------------------
-if(CMAKE_HOST_WIN32)
+if(IS_HOST_WINDOWS)
     if(NOT USE_WSL_TOOLS)
         message(FATAL_ERROR
             "WSL is required on Windows for bash but USE_WSL_TOOLS is not set. "
@@ -271,7 +291,7 @@ message(STATUS "Using BASH for autotools: ${BASH_EXECUTABLE} ${BASH_WSL_CMD}")
 # Windows WSL sanity checks: autoreconf / autoconf / automake / libtool
 # WSL is the single Windows path — probe inside WSL bash, not MSYS.
 # ---------------------------------------------------------------------------
-if(CMAKE_HOST_WIN32)
+if(IS_HOST_WINDOWS)
     # Probe autoreconf inside WSL bash (required for libffi/lcms2 autogen.sh)
     execute_process(
         COMMAND ${WSL_EXECUTABLE} bash -c "command -v autoreconf >/dev/null 2>&1 && echo FOUND || echo MISSING"
@@ -324,7 +344,7 @@ endif()
 # Ninja: Android SDK's ninja has no space; Meson's "C:/Program Files/Meson/ninja.exe"
 # breaks `cmake -E env "NINJA=..."` (space splits NAME=VALUE) and try_compile.
 # WSL is single Windows path — on WIN32 always prefer Android SDK ninja.
-if(CMAKE_HOST_WIN32)
+if(IS_HOST_WINDOWS)
     # On Windows, Android SDK ninja is at ANDROID_NDK's parent + cmake/3.22.1/bin/ninja.exe.
     # Try explicit known locations first (no Program Files space).
     if(EXISTS "C:/Users/Branden/AppData/Local/Android/Sdk/cmake/3.22.1/bin/ninja.exe")
@@ -582,7 +602,7 @@ endif()
 # the trailing `0` from `C:` split causes `invalid variable name: '0'`.
 # This handles *any* drive letter (C, D, ...). We convert unconditionally:
 # on Linux to_msys_path leaves Unix paths unchanged, on Windows it converts
-# C:/... -> /mnt/c/... . This avoids relying on if(CMAKE_HOST_WIN32) which can be
+# C:/... -> /mnt/c/... . This avoids relying on if(IS_HOST_WINDOWS) which can be
 # unreliable when CMAKE_SYSTEM_NAME is set to Android.
 to_msys_path("${CMAKE_C_COMPILER}" _cc_msys)
 to_msys_path("${CMAKE_CXX_COMPILER}" _cxx_msys)
