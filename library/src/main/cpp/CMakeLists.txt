@@ -217,14 +217,14 @@ if(IS_HOST_WINDOWS)
     find_program(WSL_MESON_PATH meson PATHS /usr/bin NO_CACHE)
     set(Meson_EXECUTABLE "wsl" CACHE FILEPATH "WSL Meson wrapper" FORCE)
     set(MESON_VIA_WSL TRUE)
-    set(MESON_WSL_CMD "meson")
-    message(STATUS "Using WSL Meson: wsl meson (single Windows path)")
+    set(MESON_WSL_CMD "/usr/bin/meson")
+    message(STATUS "Using WSL Meson: wsl /usr/bin/meson (single Windows path, avoids MSYS /mnt/c/msys64)")
 elseif(USE_WSL_TOOLS)
   # WSL on non-WIN32 (should not happen, but keep for completeness via /proc/version)
   find_program(WSL_MESON_PATH meson PATHS /usr/bin NO_CACHE)
   set(Meson_EXECUTABLE "wsl" CACHE FILEPATH "WSL Meson wrapper" FORCE)
   set(MESON_VIA_WSL TRUE)
-  set(MESON_WSL_CMD "meson")
+  set(MESON_WSL_CMD "/usr/bin/meson")
   message(STATUS "Using WSL Meson: wsl meson")
 else()
   find_program(Meson_EXECUTABLE
@@ -263,13 +263,13 @@ if(IS_HOST_WINDOWS)
     endif()
     set(BASH_EXECUTABLE "wsl" CACHE FILEPATH "WSL Bash" FORCE)
     set(BASH_VIA_WSL TRUE)
-    set(BASH_WSL_CMD "bash")
-    message(STATUS "Using WSL Bash: wsl bash (single Windows path)")
+    set(BASH_WSL_CMD "/usr/bin/bash")
+    message(STATUS "Using WSL Bash: wsl /usr/bin/bash (single Windows path, avoids MSYS)")
 elseif(USE_WSL_TOOLS)
   # WSL detected via /proc/version on non-WIN32 interop (e.g. wsl cmake inside WSL)
   set(BASH_EXECUTABLE "wsl" CACHE FILEPATH "WSL Bash" FORCE)
   set(BASH_VIA_WSL TRUE)
-  set(BASH_WSL_CMD "bash")
+  set(BASH_WSL_CMD "/usr/bin/bash")
   message(STATUS "Using WSL Bash: wsl bash")
 endif()
 if(NOT BASH_EXECUTABLE)
@@ -723,7 +723,7 @@ if [[ "$prefix_in" =~ ^[A-Za-z]:/ ]]; then
   if command -v cygpath >/dev/null 2>&1; then prefix_in=$(cygpath -u "$prefix_in" 2>/dev/null || echo "$prefix_in"); elif command -v wslpath >/dev/null 2>&1; then prefix_in=$(wslpath -u "$prefix_in" 2>/dev/null || echo "$prefix_in"); fi
 fi
 cd "$src"
-make -j1 install V=1
+/usr/bin/make -j1 install V=1
 mkdir -p "$prefix_in/lib/pkgconfig"
 # Use Windows C:/ style for .pc prefix so pkg-config emits C:/ for NDK's Windows clang
 # (which is invoked as C:/.../clang++.exe with C:\... test files from WSL's meson)
