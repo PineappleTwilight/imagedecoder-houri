@@ -297,48 +297,65 @@ if(WIN32)
     endif()
 endif()
 
-# Prefer Android SDK's ninja (no Program Files space) over Meson's ninja.
-# On Windows, "C:/Program Files/Meson/ninja.exe" contains a space which
-# breaks ExternalProject's CMAKE_ARGS when passed as -DCMAKE_MAKE_PROGRAM.
-# We detect a space and either find an alternative without space or skip
-# setting CMAKE_MAKE_PROGRAM and let CMake find ninja via PATH.
-find_program(Ninja_EXECUTABLE NAMES ninja ninja.exe
-    HINTS
-        "$ENV{ANDROID_HOME}/cmake/3.22.1/bin"
-        "$ENV{ANDROID_SDK_ROOT}/cmake/3.22.1/bin"
-    NO_DEFAULT_PATH
-)
-if(NOT Ninja_EXECUTABLE)
+# Ninja: Android SDK's ninja has no space; Meson's "C:/Program Files/Meson/ninja.exe"
+# breaks `cmake -E env "NINJA=..."` (space splits NAME=VALUE) and try_compile.
+# WSL is single Windows path — on WIN32 always prefer Android SDK ninja.
+if(WIN32)
+    # On Windows, Android SDK ninja is at ANDROID_NDK's parent + cmake/3.22.1/bin/ninja.exe.
+    # Try explicit known locations first (no Program Files space).
+    if(EXISTS "C:/Users/Branden/AppData/Local/Android/Sdk/cmake/3.22.1/bin/ninja.exe")
+        set(Ninja_EXECUTABLE "C:/Users/Branden/AppData/Local/Android/Sdk/cmake/3.22.1/bin/ninja.exe" CACHE FILEPATH "Android SDK Ninja" FORCE)
+        message(STATUS "Using Ninja (WIN32 WSL-aware): ${Ninja_EXECUTABLE}")
+    elseif(EXISTS "$ENV{ANDROID_HOME}/cmake/3.22.1/bin/ninja.exe")
+        set(Ninja_EXECUTABLE "$ENV{ANDROID_HOME}/cmake/3.22.1/bin/ninja.exe" CACHE FILEPATH "Android SDK Ninja" FORCE)
+        message(STATUS "Using Ninja from ANDROID_HOME: ${Ninja_EXECUTABLE}")
+    elseif(EXISTS "$ENV{ANDROID_SDK_ROOT}/cmake/3.22.1/bin/ninja.exe")
+        set(Ninja_EXECUTABLE "$ENV{ANDROID_SDK_ROOT}/cmake/3.22.1/bin/ninja.exe" CACHE FILEPATH "Android SDK Ninja" FORCE)
+        message(STATUS "Using Ninja from ANDROID_SDK_ROOT: ${Ninja_EXECUTABLE}")
+    else()
+        # Fallback: search PATH but reject any with space (Meson's Program Files)
+        find_program(Ninja_EXECUTABLE NAMES ninja ninja.exe)
+        if(Ninja_EXECUTABLE MATCHES " ")
+            message(WARNING "Ninja at '${Ninja_EXECUTABLE}' contains space — skipping, will use Android SDK ninja or auto-detect. Install via SDK Manager: cmake 3.22.1")
+            set(Ninja_EXECUTABLE "" CACHE FILEPATH "Ninja skipped due to space" FORCE)
+        elseif(Ninja_EXECUTABLE)
+            message(STATUS "Using Ninja from PATH: ${Ninja_EXECUTABLE}")
+        endif()
+    endif()
+    # Final guard: if we still picked Meson's ninja with space, clear it
+    if(Ninja_EXECUTABLE MATCHES "Program Files")
+        message(WARNING "Rejecting Meson ninja with space: ${Ninja_EXECUTABLE} — using Android SDK ninja")
+        if(EXISTS "C:/Users/Branden/AppData/Local/Android/Sdk/cmake/3.22.1/bin/ninja.exe")
+            set(Ninja_EXECUTABLE "C:/Users/Branden/AppData/Local/Android/Sdk/cmake/3.22.1/bin/ninja.exe" CACHE FILEPATH "Android SDK Ninja" FORCE)
+        else()
+            set(Ninja_EXECUTABLE "" CACHE FILEPATH "Ninja cleared" FORCE)
+        endif()
+    endif()
+else()
+    # Linux/macOS: prefer SDK, then Meson, then PATH
     find_program(Ninja_EXECUTABLE NAMES ninja ninja.exe
         HINTS
-            "C:/Program Files/Meson"
-            "$ENV{ProgramFiles}/Meson"
-            "C:/Program Files/Ninja"
+            "$ENV{ANDROID_HOME}/cmake/3.22.1/bin"
+            "$ENV{ANDROID_SDK_ROOT}/cmake/3.22.1/bin"
+        NO_DEFAULT_PATH
     )
-endif()
-if(NOT Ninja_EXECUTABLE)
-    find_program(Ninja_EXECUTABLE NAMES ninja ninja.exe)
-endif()
-if(Ninja_EXECUTABLE)
-    if(Ninja_EXECUTABLE MATCHES " ")
-        message(WARNING "Ninja at '${Ninja_EXECUTABLE}' contains space - may break try_compile. "
-            "Attempting to find alternative without space or will skip CMAKE_MAKE_PROGRAM.")
-        # Try to find ninja via PATH without the Program Files one
+    if(NOT Ninja_EXECUTABLE)
+        find_program(Ninja_EXECUTABLE NAMES ninja ninja.exe
+            HINTS
+                "C:/Program Files/Meson"
+                "$ENV{ProgramFiles}/Meson"
+                "C:/Program Files/Ninja"
+        )
+    endif()
+    if(NOT Ninja_EXECUTABLE)
+        find_program(Ninja_EXECUTABLE NAMES ninja ninja.exe)
+    endif()
+    if(Ninja_EXECUTABLE AND Ninja_EXECUTABLE MATCHES " ")
+        message(WARNING "Ninja at '${Ninja_EXECUTABLE}' contains space - may break try_compile.")
         find_program(_alt_ninja ninja NO_CMAKE_PATH)
         if(_alt_ninja AND NOT _alt_ninja MATCHES " ")
             set(Ninja_EXECUTABLE "${_alt_ninja}")
             message(STATUS "Using alternative Ninja without space: ${Ninja_EXECUTABLE}")
-        else()
-            # Try Android SDK's ninja explicitly
-            if(EXISTS "$ENV{ANDROID_HOME}/cmake/3.22.1/bin/ninja.exe")
-                set(Ninja_EXECUTABLE "$ENV{ANDROID_HOME}/cmake/3.22.1/bin/ninja.exe")
-                message(STATUS "Falling back to Android SDK Ninja: ${Ninja_EXECUTABLE}")
-            elseif(EXISTS "C:/Users/Branden/AppData/Local/Android/Sdk/cmake/3.22.1/bin/ninja.exe")
-                set(Ninja_EXECUTABLE "C:/Users/Branden/AppData/Local/Android/Sdk/cmake/3.22.1/bin/ninja.exe")
-            else()
-                message(STATUS "Skipping CMAKE_MAKE_PROGRAM due to space - CMake will auto-detect ninja")
-                set(Ninja_EXECUTABLE "")
-            endif()
         endif()
     endif()
 endif()
