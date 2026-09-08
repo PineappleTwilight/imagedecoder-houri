@@ -14,10 +14,34 @@ project("imagedecoder_s")
 # and autotools (declare_dependency is_parent_path assert at gio/meson.build:925).
 # ---------------------------------------------------------------------------
 if(WIN32)
-  find_program(WSL_EXECUTABLE wsl NO_CACHE)
+  # Robust wsl.exe discovery: System32 is redirected for 32-bit processes (SysWOW64),
+  # so also check Sysnative and explicit System32 paths. WSL is single only path.
+  find_program(WSL_EXECUTABLE NAMES wsl wsl.exe
+    HINTS
+      "C:/Windows/System32"
+      "C:/Windows/Sysnative"
+      "$ENV{SystemRoot}/System32"
+      "$ENV{SystemRoot}/Sysnative"
+      "$ENV{WINDIR}/System32"
+      "$ENV{WINDIR}/Sysnative"
+    NO_DEFAULT_PATH
+  )
+  if(NOT WSL_EXECUTABLE)
+    find_program(WSL_EXECUTABLE NAMES wsl wsl.exe)
+  endif()
+  if(NOT WSL_EXECUTABLE)
+    if(EXISTS "C:/Windows/System32/wsl.exe")
+      set(WSL_EXECUTABLE "C:/Windows/System32/wsl.exe" CACHE FILEPATH "WSL" FORCE)
+    elseif(EXISTS "C:/Windows/Sysnative/wsl.exe")
+      set(WSL_EXECUTABLE "C:/Windows/Sysnative/wsl.exe" CACHE FILEPATH "WSL" FORCE)
+    elseif(EXISTS "C:/Windows/System32/wsl.exe")
+      set(WSL_EXECUTABLE "C:/Windows/System32/wsl.exe" CACHE FILEPATH "WSL" FORCE)
+    endif()
+  endif()
   if(NOT WSL_EXECUTABLE)
     message(FATAL_ERROR
-        "WSL is required on Windows for imagedecoder builds but 'wsl' was not found on PATH.\n"
+        "WSL is required on Windows for imagedecoder builds but 'wsl' was not found.\n"
+        "  Searched PATH and C:/Windows/System32/wsl.exe + C:/Windows/Sysnative/wsl.exe (for 32-bit redirection).\n"
         "  Install WSL: https://aka.ms/wsl  (elevated PowerShell: 'wsl --install')\n"
         "  Ensure 'wsl --status' works, and inside WSL: sudo apt update && sudo apt install -y build-essential autoconf automake libtool pkg-config meson ninja-build cmake python3\n"
         "  MSYS2/Git Bash is NOT supported — WSL is the single only path.")
