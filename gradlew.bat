@@ -68,15 +68,24 @@ echo location of your Java installation. 1>&2
 "%COMSPEC%" /c exit 1
 
 :execute
-@rem Setup the command line
-
-
-
-@rem Execute Gradle
-@rem endlocal doesn't take effect until after the line is parsed and variables are expanded
-@rem which allows us to clear the local environment before executing the java command
-endlocal & "%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -jar "%APP_HOME%\gradle\wrapper\gradle-wrapper.jar" %* & call :exitWithErrorLevel
-
-:exitWithErrorLevel
-@rem Use "%COMSPEC%" /c exit to allow operators to work properly in scripts
-"%COMSPEC%" /c exit %ERRORLEVEL%
+@rem ---------------------------------------------------------------------------
+@rem WSL is the SINGLE only path for Windows compilation. On Windows, delegate
+@rem EVERYTHING to WSL's Linux gradlew (wsl bash). No Windows java/gradle fallback.
+@rem This avoids C:/ vs /c/ vs C:\ path bugs (Meson 1.12.0 etc.) by running all
+@rem native builds (meson, autotools, cmake, ninja, pkg-config) via WSL Linux.
+@rem ---------------------------------------------------------------------------
+where wsl >nul 2>&1
+if %ERRORLEVEL% equ 0 (
+    @rem Preserve exit code from WSL. Use wslpath to convert APP_HOME to /mnt/c/ form.
+    @rem %* contains all args; pass them through bash -c with proper quoting via %*.
+    wsl bash -c "cd \"$(wslpath -u '%APP_HOME%')\" && ./gradlew %*"
+    "%COMSPEC%" /c exit %ERRORLEVEL%
+)
+echo. 1>&2
+echo ERROR: WSL is required on Windows for imagedecoder builds but 'wsl' not found. 1>&2
+echo. 1>&2
+echo Install WSL from https://aka.ms/wsl  ^(elevated PowerShell: wsl --install^) 1>&2
+echo Ensure 'wsl --status' works, then inside WSL: 1>&2
+echo   sudo apt update ^&^& sudo apt install -y build-essential autoconf automake libtool pkg-config meson ninja-build cmake python3 openjdk-21-jdk 1>&2
+echo MSYS2/Git Bash is NOT supported -- WSL is the single only path. 1>&2
+"%COMSPEC%" /c exit 1

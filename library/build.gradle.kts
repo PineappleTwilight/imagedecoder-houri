@@ -26,57 +26,36 @@ android {
             cmake {
                 cppFlags("-O3 -flto")
                 targets("ep_imagedecoder")
-                // Force MSYS2 Bash on Windows before Git Bash / WSL bash (MSYS has autoreconf etc.)
-                // Use forward slashes; CMake will handle the space in "Program Files".
+                // WSL is the SINGLE path for Windows native builds. No MSYS2/Git Bash fallback.
+                // CMakeLists.txt (WIN32) will FATAL_ERROR if WSL is missing, so we only verify
+                // here with a clear Gradle error before CMake configuration starts.
                 if (System.getProperty("os.name").contains("Windows", ignoreCase = true)) {
-                    val msysBash = File("C:/msys64/usr/bin/bash.exe")
-                    val msysBash2 = File("C:/tools/msys64/usr/bin/bash.exe")
-                    val msysBash3 = File("C:/msys64/bin/bash.exe")
-                    val gitBash = File("C:/Program Files/Git/usr/bin/bash.exe")
-                    val gitBashAlt = File("C:/Program Files/Git/bin/bash.exe")
-                    val bashPath = when {
-                        msysBash.exists() -> msysBash.absolutePath
-                        msysBash2.exists() -> msysBash2.absolutePath
-                        msysBash3.exists() -> msysBash3.absolutePath
-                        gitBash.exists() -> gitBash.absolutePath
-                        gitBashAlt.exists() -> gitBashAlt.absolutePath
-                        else -> null
+                    val wslCandidates = listOf(
+                        File("C:/Windows/System32/wsl.exe"),
+                        File("C:/Windows/Sysnative/wsl.exe"),
+                    )
+                    val wslFoundViaFile = wslCandidates.any { it.exists() }
+                    val wslFoundViaExec = try {
+                        val proc = ProcessBuilder("wsl", "--status")
+                            .redirectErrorStream(true).start()
+                        proc.waitFor(8, java.util.concurrent.TimeUnit.SECONDS)
+                        wslFoundViaFile || proc.exitValue() == 0
+                    } catch (_: Exception) {
+                        wslFoundViaFile
                     }
-                    if (bashPath != null) {
-                        arguments += "-DBASH_EXECUTABLE=${bashPath.replace('\\', '/')}"
+                    if (!wslFoundViaExec) {
+                        throw org.gradle.api.GradleException(
+                            "WSL is required on Windows for imagedecoder native builds. " +
+                                "WSL not found (checked 'wsl --status' and ${wslCandidates.joinToString()} ). " +
+                                "Install WSL from https://aka.ms/wsl (run 'wsl --install' in elevated PowerShell), " +
+                                "ensure 'wsl --status' works, then: pacman -S base-devel autoconf automake libtool pkg-config meson ninja cmake  inside WSL, " +
+                                "and re-sync Gradle. MSYS2/Git Bash is NOT supported — WSL is the single only path.",
+                        )
                     }
-                    // Make is required for autotools (libiconv/lcms2/libffi); chocolatey make
-                    // breaks MSYS /c/... paths, so force MSYS2 make when on Windows.
-                    val msysMake = File("C:/msys64/usr/bin/make.exe")
-                    val msysMake2 = File("C:/msys64/bin/make.exe")
-                    val msysMake3 = File("C:/tools/msys64/usr/bin/make.exe")
-                    val msysMake4 = File("C:/msys64/mingw64/bin/make.exe")
-                    val msysMake5 = File("C:/msys64/mingw64/bin/mingw32-make.exe")
-                    val makePath = when {
-                        msysMake.exists() -> msysMake.absolutePath
-                        msysMake2.exists() -> msysMake2.absolutePath
-                        msysMake3.exists() -> msysMake3.absolutePath
-                        msysMake4.exists() -> msysMake4.absolutePath
-                        msysMake5.exists() -> msysMake5.absolutePath
-                        else -> null
-                    }
-                    if (makePath != null) {
-                        arguments += "-DMake_EXECUTABLE=${makePath.replace('\\', '/')}"
-                    }
-                    val mesonBash = File("C:/Program Files/Meson/meson.exe")
-                    if (mesonBash.exists()) {
-                        arguments += "-DMeson_EXECUTABLE=${mesonBash.absolutePath.replace('\\', '/')}"
-                    }
-                    val ninjaFromMeson = File("C:/Program Files/Meson/ninja.exe")
-                    val ninjaFromSdk = File(System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT") ?: "", "cmake/3.22.1/bin/ninja.exe")
-                    val ninjaPath = when {
-                        ninjaFromSdk.exists() -> ninjaFromSdk.absolutePath
-                        ninjaFromMeson.exists() -> ninjaFromMeson.absolutePath
-                        else -> null
-                    }
-                    if (ninjaPath != null) {
-                        arguments += "-DNinja_EXECUTABLE=${ninjaPath.replace('\\', '/')}"
-                    }
+                    // Do NOT pass BASH_EXECUTABLE/Make_EXECUTABLE/Meson_EXECUTABLE for Windows:
+                    // CMakeLists.txt detects WIN32+WSL and forces 'wsl bash' / 'wsl meson' / 'wsl make' etc.
+                    // Passing MSYS Windows paths would override that and reintroduce C:/ vs /c/ bugs.
+                    logger.lifecycle("Windows detected: delegating all native builds to WSL (single path).")
                 }
             }
         }

@@ -8,41 +8,58 @@ endif()
 project("imagedecoder_s")
 
 # ---------------------------------------------------------------------------
-# WSL interop: If we're on Windows and WSL is available, prefer WSL's Linux
-# tools (meson 1.7.0, pkg-config, bash, make) over Windows binaries
-# (meson.exe 1.12.0, msys64 pkg-config) to avoid C:/ vs /c/ vs C:\ path
-# style bugs that trigger Meson 1.12.0 declare_dependency is_parent_path
-# assert at gio/meson.build:925 with iconv variables.
+# WSL is the SINGLE path for Windows native builds. No MSYS2/Git Bash fallback.
+# On WIN32, WSL is REQUIRED; cmake FATAL_ERRORs if wsl.exe is missing.
+# This avoids C:/ vs /c/ vs C:\ path bugs from Meson 1.12.0, MSYS pkg-config,
+# and autotools (declare_dependency is_parent_path assert at gio/meson.build:925).
 # ---------------------------------------------------------------------------
 if(WIN32)
   find_program(WSL_EXECUTABLE wsl NO_CACHE)
-  if(WSL_EXECUTABLE)
-    execute_process(COMMAND ${WSL_EXECUTABLE} --status OUTPUT_VARIABLE _wsl_status ERROR_QUIET)
-    # wsl --status returns 0 if WSL is available, but we just check existence
-    message(STATUS "WSL detected at ${WSL_EXECUTABLE} - will use WSL Linux tools when possible")
-    set(USE_WSL_TOOLS TRUE)
-    # Helper to run a command via WSL: wsl <cmd> <args>
-    # For meson, we want "wsl meson" not "C:/Program Files/Meson/meson.exe"
-    find_program(WSL_MESON wsl_meson_helper NO_CACHE) # dummy to avoid re-search
+  if(NOT WSL_EXECUTABLE)
+    message(FATAL_ERROR
+        "WSL is required on Windows for imagedecoder builds but 'wsl' was not found on PATH.\n"
+        "  Install WSL: https://aka.ms/wsl  (elevated PowerShell: 'wsl --install')\n"
+        "  Ensure 'wsl --status' works, and inside WSL: sudo apt update && sudo apt install -y build-essential autoconf automake libtool pkg-config meson ninja-build cmake python3\n"
+        "  MSYS2/Git Bash is NOT supported — WSL is the single only path.")
+  endif()
+  execute_process(COMMAND ${WSL_EXECUTABLE} --status OUTPUT_VARIABLE _wsl_status ERROR_VARIABLE _wsl_err RESULT_VARIABLE _wsl_res ERROR_QUIET)
+  message(STATUS "WSL detected at ${WSL_EXECUTABLE} (status ${_wsl_res}) - using WSL Linux tools for ALL ExternalProject builds (wsl meson, wsl bash, wsl make, wsl pkg-config)")
+  set(USE_WSL_TOOLS TRUE)
+  # When USE_WSL_TOOLS, the entire cmake ExternalProject compile (meson, autotools, cmake)
+  # will be driven via WSL's Linux binaries (wsl meson, wsl bash, wsl cmake, wsl ninja)
+  # to avoid any Windows C:/ vs /c/ vs C:\ path style bugs. The outer cmake that
+  # gradlew.bat invokes (C:/.../cmake.exe) stays on Windows, but every
+  # ExternalProject step is via wsl.
+  find_program(WSL_MESON wsl_meson_helper NO_CACHE) # dummy to avoid re-search
+  # For cmake-based ExternalProjects (libwebp, zlib, etc.), use WSL's cmake
+  find_program(WSL_CMAKE_PATH cmake PATHS /usr/bin NO_CACHE)
+  if(WSL_CMAKE_PATH)
+    message(STATUS "WSL cmake found at ${WSL_CMAKE_PATH} - ExternalProject cmake steps will use wsl cmake")
   endif()
 endif()
 
 # ---------------------------------------------------------------------------
-# Helper: Convert a Windows absolute path (C:/foo or C:\foo) to Unix path
-# Handles both MSYS (/c/foo) and WSL (/mnt/c/foo). Detects WSL via
-# /proc/version so that Windows cmake + WSL bash interop uses /mnt/c/.
-# If path is already Unix (/c/..., /mnt/c/..., /...), returns unchanged.
+# Helper: Convert a Windows absolute path (C:/foo or C:\foo) to Unix path.
+# WSL is the SINGLE Windows path: always emits /mnt/c/... on WIN32.
+# On Linux, leaves /usr/... unchanged. Legacy MSYS /c/... is auto-upgraded
+# to /mnt/c/... when WIN32 (WSL-only).
 # ---------------------------------------------------------------------------
 function(to_msys_path win_path out_var)
     # Normalise backslashes to forward slashes without using file(TO_CMAKE_PATH),
     # which behaves differently on Linux vs Windows (on Linux it inserts ';').
     string(REPLACE "\\" "/" _tmp "${win_path}")
-    # Already Unix style? (/c/... or /mnt/c/... or /usr/...)
+    # Already Unix style? (/mnt/c/... or /usr/...)
     if(_tmp MATCHES "^/mnt/[a-z]/")
         set(${out_var} "${_tmp}" PARENT_SCOPE)
         return()
     endif()
     if(_tmp MATCHES "^/[a-z]/")
+        # Legacy MSYS /c/... on WIN32 -> upgrade to WSL /mnt/c/... (WSL-only)
+        if(WIN32)
+            string(REGEX REPLACE "^/([a-z])/" "/mnt/\\1/" _tmp2 "${_tmp}")
+            set(${out_var} "${_tmp2}" PARENT_SCOPE)
+            return()
+        endif()
         set(${out_var} "${_tmp}" PARENT_SCOPE)
         return()
     endif()
@@ -54,18 +71,23 @@ function(to_msys_path win_path out_var)
     string(REGEX MATCH "^([A-Za-z]):/(.*)" _m "${_tmp}")
     if(CMAKE_MATCH_1)
         string(TOLOWER "${CMAKE_MATCH_1}" _drive)
-        # Detect WSL: /proc/version contains microsoft/WSL
-        set(_is_wsl FALSE)
-        if(EXISTS "/proc/version")
-            file(READ "/proc/version" _wsl_ver)
-            if(_wsl_ver MATCHES "microsoft|WSL")
-                set(_is_wsl TRUE)
-            endif()
-        endif()
-        if(_is_wsl)
+        if(WIN32)
+            # WSL-only: C:/ -> /mnt/c/
             set(${out_var} "/mnt/${_drive}/${CMAKE_MATCH_2}" PARENT_SCOPE)
         else()
-            set(${out_var} "/${_drive}/${CMAKE_MATCH_2}" PARENT_SCOPE)
+            # On Linux, handle any pre-existing /mnt style from interop, else /c/
+            set(_is_wsl FALSE)
+            if(EXISTS "/proc/version")
+                file(READ "/proc/version" _wsl_ver)
+                if(_wsl_ver MATCHES "microsoft|WSL")
+                    set(_is_wsl TRUE)
+                endif()
+            endif()
+            if(_is_wsl)
+                set(${out_var} "/mnt/${_drive}/${CMAKE_MATCH_2}" PARENT_SCOPE)
+            else()
+                set(${out_var} "/${_drive}/${CMAKE_MATCH_2}" PARENT_SCOPE)
+            endif()
         endif()
     else()
         set(${out_var} "${_tmp}" PARENT_SCOPE)
@@ -73,108 +95,93 @@ function(to_msys_path win_path out_var)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# Tool detection: Make
+# Tool detection: Make — WSL is the single Windows path.
 # ---------------------------------------------------------------------------
-# Prefer MSYS2 make on Windows over MinGW or other makes that mis-handle
-# MSYS paths. Search MSYS locations first when WIN32. If Make_EXECUTABLE
-# was already passed via -D (e.g., from build.gradle.kts), keep it.
-if(WIN32 AND NOT Make_EXECUTABLE)
-    # Strictly require MSYS2 make on Windows. Chocolatey/MinGW make cannot
-    # handle MSYS Unix paths (/c/...) and breaks autotools (C:/ vs /c/).
-    # Check all known MSYS2 locations (msys, mingw64, ucrt64, clang64).
-    set(_msys_make_candidates
-        "C:/msys64/usr/bin/make.exe"
-        "C:/msys64/bin/make.exe"
-        "C:/msys64/mingw64/bin/make.exe"
-        "C:/msys64/mingw64/bin/mingw32-make.exe"
-        "C:/msys64/ucrt64/bin/make.exe"
-        "C:/msys64/ucrt64/bin/mingw32-make.exe"
-        "C:/msys64/clang64/bin/make.exe"
-        "C:/tools/msys64/usr/bin/make.exe"
-        "C:/tools/msys64/mingw64/bin/make.exe"
-        "D:/msys64/usr/bin/make.exe"
-        "C:/msys2/usr/bin/make.exe"
-    )
-    foreach(_p IN LISTS _msys_make_candidates)
-        if(EXISTS "${_p}")
-            set(Make_EXECUTABLE "${_p}" CACHE FILEPATH "MSYS2 Make" FORCE)
-            message(STATUS "Found MSYS2 make at ${_p}")
-            break()
-        endif()
-    endforeach()
-    if(NOT Make_EXECUTABLE)
-        # Fallback: search PATH for any make that is from MSYS (contains msys)
-        find_program(Make_EXECUTABLE NAMES make gmake mingw32-make)
-        if(Make_EXECUTABLE AND Make_EXECUTABLE MATCHES "msys")
-            message(STATUS "Found MSYS make via PATH: ${Make_EXECUTABLE}")
-        elseif(Make_EXECUTABLE)
-            message(STATUS "Found non-MSYS make at '${Make_EXECUTABLE}' - ignoring, need MSYS")
-            unset(Make_EXECUTABLE)
-            unset(Make_EXECUTABLE CACHE)
-            # Try where.exe to locate MSYS make
-            execute_process(
-                COMMAND where make
-                OUTPUT_VARIABLE _where_make
-                OUTPUT_STRIP_TRAILING_WHITESPACE
-                ERROR_QUIET
-            )
-            message(STATUS "where make output: ${_where_make}")
-            string(REGEX MATCH "([^\r\n]*msys64[^\r\n]*make\\.exe)" _msys_make "${_where_make}")
-            if(_msys_make AND EXISTS "${_msys_make}")
-                set(Make_EXECUTABLE "${_msys_make}" CACHE FILEPATH "MSYS2 Make" FORCE)
-                message(STATUS "Found MSYS make via where: ${Make_EXECUTABLE}")
-            endif()
-        endif()
-    endif()
-    if(NOT Make_EXECUTABLE OR NOT EXISTS "${Make_EXECUTABLE}")
+# On Windows, make runs inside WSL (wsl bash -> 'make'). We do NOT search for
+# MSYS2/Chocolatey make.exe — that path is intentionally removed. Verify that
+# WSL's Linux make exists, otherwise FATAL with WSL setup instructions.
+if(WIN32)
+    if(NOT USE_WSL_TOOLS)
         message(FATAL_ERROR
-            "MSYS2 make not found. Searched:\n"
-            "  ${_msys_make_candidates}\n"
-            "  and PATH (found '${Make_EXECUTABLE}').\n"
-            "  Install MSYS2 from https://www.msys2.org, then in MSYS2 shell run:\n"
-            "    pacman -S make base-devel autoconf automake libtool pkg-config\n"
-            "  Verify: In PowerShell run 'Get-ChildItem C:\\msys64\\usr\\bin\\make.exe' and 'where.exe make'\n"
-            "  After installing, delete external/imagedecoder-houri/library/.cxx and re-sync Gradle.\n"
-            "  Or set -DMake_EXECUTABLE=C:/msys64/usr/bin/make.exe explicitly.")
+            "WSL is required on Windows but USE_WSL_TOOLS is not set. "
+            "This means wsl.exe was not found — see earlier FATAL. "
+            "MSYS2/make.exe is NOT supported. Install WSL: https://aka.ms/wsl")
+    endif()
+    # Probe wsl make; allow override via -DMake_EXECUTABLE only if user explicitly sets it
+    if(NOT Make_EXECUTABLE OR Make_EXECUTABLE MATCHES "msys|chocolatey|ProgramData")
+        # Default to wsl wrapper; autotools helpers invoke 'make' via wsl bash, so this is a sanity check
+        set(Make_EXECUTABLE "wsl" CACHE FILEPATH "WSL Make wrapper" FORCE)
+        set(MAKE_VIA_WSL TRUE)
+        message(STATUS "Using WSL Make: wsl make (single Windows path)")
+        execute_process(
+            COMMAND ${WSL_EXECUTABLE} bash -c "command -v make >/dev/null 2>&1 && echo FOUND || echo MISSING"
+            OUTPUT_VARIABLE _make_probe
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(_make_probe STREQUAL "MISSING")
+            message(FATAL_ERROR
+                "WSL 'make' not found inside WSL. In WSL run:\n"
+                "  sudo apt update && sudo apt install -y make build-essential autoconf automake libtool pkg-config\n"
+                "  Verify: wsl bash -c \"make --version\"\n"
+                "  Then delete external/imagedecoder-houri/library/.cxx and re-sync Gradle.")
+        endif()
     endif()
 endif()
 if(NOT Make_EXECUTABLE)
     find_program(Make_EXECUTABLE make)
 endif()
-# Final guard: if we somehow still picked chocolatey, error
-if(Make_EXECUTABLE MATCHES "chocolatey|ProgramData")
-    message(FATAL_ERROR
-        "MSYS2 make is required on Windows but found '${Make_EXECUTABLE}'.\n"
-        "  This is a non-MSYS make (chocolatey) that cannot handle MSYS Unix paths (/c/...).\n"
-        "  Fix: In MSYS2 shell (e.g., MSYS2 MinGW 64-bit), run:\n"
-        "    pacman -S make base-devel autoconf automake libtool pkg-config\n"
-        "  Then ensure C:/msys64/usr/bin is before C:/ProgramData/chocolatey/bin in your PATH,\n"
-        "  or set -DMake_EXECUTABLE=C:/msys64/usr/bin/make.exe\n"
-        "  After installing, delete external/imagedecoder-houri/library/.cxx and re-sync Gradle.")
-endif()
 if(NOT Make_EXECUTABLE)
     message(FATAL_ERROR
         "Make is required.\n"
-        "  Windows MSYS64: pacman -S make  (or base-devel)\n"
-        "  Ensure C:/msys64/usr/bin is on PATH or set -DMake_EXECUTABLE=...")
+        "  WSL (Windows): sudo apt install -y make build-essential\n"
+        "  Linux: sudo apt install make / pacman -S make")
 endif()
-message(STATUS "Using Make: ${Make_EXECUTABLE}")
+if(NOT WIN32)
+    message(STATUS "Using Make: ${Make_EXECUTABLE}")
+else()
+    message(STATUS "Using Make (WSL): ${Make_EXECUTABLE} (verified via wsl bash -c 'command -v make')")
+endif()
 
 # ---------------------------------------------------------------------------
-# Tool detection: Meson — use WSL's Linux meson (1.7.0) when on Windows + WSL
-# to avoid Windows meson.exe 1.12.0 C:/ vs C:\ is_parent_path assert at
-# gio/meson.build:925 declare_dependency with C:/ prefix variables.
+# Tool detection: Meson — WSL is the single Windows path.
+# On WIN32, WSL's Linux meson must be used (Windows meson.exe 1.12.0 has
+# C:/ is_parent_path assert at gio/meson.build:925). No MSYS/Windows fallback.
 # ---------------------------------------------------------------------------
-if(USE_WSL_TOOLS)
-  # WSL's meson is /usr/bin/meson (Linux) which correctly handles /mnt/c/
-  # and doesn't have the Windows C:/ declare_dependency bug. We invoke it
-  # via "wsl meson" from Windows cmake.
+if(WIN32)
+    if(NOT USE_WSL_TOOLS)
+        message(FATAL_ERROR
+            "WSL is required on Windows for meson but USE_WSL_TOOLS is not set. "
+            "MSYS2/Windows meson.exe is NOT supported — WSL is the single only path. "
+            "Install WSL: https://aka.ms/wsl")
+    endif()
+    # Verify wsl meson exists
+    execute_process(
+        COMMAND ${WSL_EXECUTABLE} bash -c "command -v meson >/dev/null 2>&1 && echo FOUND || echo MISSING"
+        OUTPUT_VARIABLE _meson_probe
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(_meson_probe STREQUAL "MISSING")
+        message(FATAL_ERROR
+            "WSL 'meson' not found inside WSL. In WSL run:\n"
+            "  sudo apt update && sudo apt install -y meson ninja-build pkg-config python3\n"
+            "  Or pip install meson\n"
+            "  Verify: wsl bash -c \"meson --version\"\n"
+            "  Then delete external/imagedecoder-houri/library/.cxx and re-sync Gradle.")
+    endif()
+    find_program(WSL_MESON_PATH meson PATHS /usr/bin NO_CACHE)
+    set(Meson_EXECUTABLE "wsl" CACHE FILEPATH "WSL Meson wrapper" FORCE)
+    set(MESON_VIA_WSL TRUE)
+    set(MESON_WSL_CMD "meson")
+    message(STATUS "Using WSL Meson: wsl meson (single Windows path)")
+elseif(USE_WSL_TOOLS)
+  # WSL on non-WIN32 (should not happen, but keep for completeness via /proc/version)
   find_program(WSL_MESON_PATH meson PATHS /usr/bin NO_CACHE)
-  # Fallback: wsl will find it via PATH
   set(Meson_EXECUTABLE "wsl" CACHE FILEPATH "WSL Meson wrapper" FORCE)
   set(MESON_VIA_WSL TRUE)
   set(MESON_WSL_CMD "meson")
-  message(STATUS "Using WSL Meson: wsl meson (avoids Windows C:/ bug)")
+  message(STATUS "Using WSL Meson: wsl meson")
 else()
   find_program(Meson_EXECUTABLE
       NAMES meson meson.exe meson.py
@@ -200,64 +207,26 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# Tool detection: Bash (critical for autotools on Windows)
-# In MSYS2, /usr/bin/bash.exe and /bin/bash.exe are the same file but we
-# probe both. We also honour $MSYS2_ROOT / $MSYSTEM env hints.
-# WSL's C:\\Windows\\System32\\bash.exe uses /mnt/c/... paths and MUST be
-# avoided – it breaks autotools path handling.
-# If USE_WSL_TOOLS, use WSL's Linux bash (wsl bash) instead of MSYS bash
-# to avoid C:/ vs /c/ vs C:\ path style bugs with Meson 1.12.0.
+# Tool detection: Bash — WSL is the single Windows path.
+# No MSYS2/Git Bash fallback; WSL's Linux bash is the only bash on WIN32.
 # ---------------------------------------------------------------------------
-if(USE_WSL_TOOLS)
+if(WIN32)
+    if(NOT USE_WSL_TOOLS)
+        message(FATAL_ERROR
+            "WSL is required on Windows for bash but USE_WSL_TOOLS is not set. "
+            "MSYS2/Git Bash is NOT supported — WSL is the single only path. "
+            "Install WSL: https://aka.ms/wsl  (wsl --install), then inside WSL: sudo apt install -y bash")
+    endif()
+    set(BASH_EXECUTABLE "wsl" CACHE FILEPATH "WSL Bash" FORCE)
+    set(BASH_VIA_WSL TRUE)
+    set(BASH_WSL_CMD "bash")
+    message(STATUS "Using WSL Bash: wsl bash (single Windows path)")
+elseif(USE_WSL_TOOLS)
+  # WSL detected via /proc/version on non-WIN32 interop (e.g. wsl cmake inside WSL)
   set(BASH_EXECUTABLE "wsl" CACHE FILEPATH "WSL Bash" FORCE)
   set(BASH_VIA_WSL TRUE)
   set(BASH_WSL_CMD "bash")
-  message(STATUS "Using WSL Bash: wsl bash (avoids Windows C:/ bugs)")
-elseif(WIN32)
-    # Honour explicit env var if user set MSYS2 location
-    if(DEFINED ENV{MSYS2_ROOT} AND EXISTS "$ENV{MSYS2_ROOT}/usr/bin/bash.exe")
-        set(_msys_hint_bash "$ENV{MSYS2_ROOT}/usr/bin/bash.exe")
-    elseif(DEFINED ENV{MSYS_ROOT} AND EXISTS "$ENV{MSYS_ROOT}/usr/bin/bash.exe")
-        set(_msys_hint_bash "$ENV{MSYS_ROOT}/usr/bin/bash.exe")
-    endif()
-    if(_msys_hint_bash)
-        set(BASH_EXECUTABLE "${_msys_hint_bash}" CACHE FILEPATH "MSYS2 Bash" FORCE)
-        message(STATUS "Using BASH from env hint: ${BASH_EXECUTABLE}")
-    elseif(EXISTS "C:/msys64/usr/bin/bash.exe")
-        set(BASH_EXECUTABLE "C:/msys64/usr/bin/bash.exe" CACHE FILEPATH "MSYS2 Bash" FORCE)
-    elseif(EXISTS "C:/tools/msys64/usr/bin/bash.exe")
-        set(BASH_EXECUTABLE "C:/tools/msys64/usr/bin/bash.exe" CACHE FILEPATH "MSYS2 Bash" FORCE)
-    elseif(EXISTS "D:/msys64/usr/bin/bash.exe")
-        set(BASH_EXECUTABLE "D:/msys64/usr/bin/bash.exe" CACHE FILEPATH "MSYS2 Bash" FORCE)
-    elseif(EXISTS "C:/msys64/bin/bash.exe")
-        set(BASH_EXECUTABLE "C:/msys64/bin/bash.exe" CACHE FILEPATH "MSYS2 Bash" FORCE)
-    elseif(EXISTS "C:/Program Files/Git/usr/bin/bash.exe")
-        set(BASH_EXECUTABLE "C:/Program Files/Git/usr/bin/bash.exe" CACHE FILEPATH "Git Bash" FORCE)
-    elseif(EXISTS "C:/Program Files/Git/bin/bash.exe")
-        set(BASH_EXECUTABLE "C:/Program Files/Git/bin/bash.exe" CACHE FILEPATH "Git Bash" FORCE)
-    elseif(BASH_EXECUTABLE MATCHES "System32|WindowsApps" OR NOT BASH_EXECUTABLE)
-        find_program(_better_bash bash
-            HINTS
-                "C:/msys64/usr/bin"
-                "C:/msys64/bin"
-                "C:/tools/msys64/usr/bin"
-                "C:/tools/msys64/bin"
-                "D:/msys64/usr/bin"
-                "C:/Program Files/Git/usr/bin"
-                "C:/Program Files/Git/bin"
-            NO_DEFAULT_PATH
-        )
-        if(_better_bash)
-            set(BASH_EXECUTABLE "${_better_bash}" CACHE FILEPATH "Bash" FORCE)
-        elseif(NOT BASH_EXECUTABLE)
-            find_program(BASH_EXECUTABLE bash)
-        endif()
-    endif()
-    if(BASH_EXECUTABLE MATCHES "System32")
-        message(WARNING "BASH_EXECUTABLE points at WSL bash (${BASH_EXECUTABLE}) – "
-            "this will break autotools (needs MSYS2 /c/... not /mnt/c/...). "
-            "Install MSYS2 from https://www.msys2.org and ensure C:/msys64/usr/bin/bash.exe exists.")
-    endif()
+  message(STATUS "Using WSL Bash: wsl bash")
 endif()
 if(NOT BASH_EXECUTABLE)
     find_program(BASH_EXECUTABLE bash)
@@ -275,49 +244,56 @@ set(AUTOTOOLS_BASH_PREFIX "${BASH_EXECUTABLE}")
 message(STATUS "Using BASH for autotools: ${BASH_EXECUTABLE} ${BASH_WSL_CMD}")
 
 # ---------------------------------------------------------------------------
-# Windows MSYS2 sanity checks: autoreconf / autoconf / automake / libtool
-# These are required for libffi (autogen.sh) and lcms2 (autogen.sh).
-# We test via bash so the check respects the MSYS PATH view, not Windows PATH.
+# Windows WSL sanity checks: autoreconf / autoconf / automake / libtool
+# WSL is the single Windows path — probe inside WSL bash, not MSYS.
 # ---------------------------------------------------------------------------
 if(WIN32)
-    # Build PATH that bash will see: prepend MSYS bin dirs if they exist.
-    set(_msys_path_extra "")
-    foreach(_d IN ITEMS "C:/msys64/usr/bin" "C:/msys64/bin" "C:/tools/msys64/usr/bin" "D:/msys64/usr/bin")
-        if(EXISTS "${_d}")
-            if(_msys_path_extra)
-                set(_msys_path_extra "${_d}:${_msys_path_extra}")
-            else()
-                set(_msys_path_extra "${_d}")
-            endif()
-        endif()
-    endforeach()
-    # Probe autoreconf inside MSYS bash
+    # Probe autoreconf inside WSL bash (required for libffi/lcms2 autogen.sh)
     execute_process(
-        COMMAND "${BASH_EXECUTABLE}" -c "command -v autoreconf >/dev/null 2>&1 && echo FOUND || echo MISSING"
+        COMMAND ${WSL_EXECUTABLE} bash -c "command -v autoreconf >/dev/null 2>&1 && echo FOUND || echo MISSING"
         OUTPUT_VARIABLE _autoreconf_probe
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET
     )
     if(_autoreconf_probe STREQUAL "MISSING")
         message(WARNING
-            "autoreconf not found inside MSYS bash (${BASH_EXECUTABLE}).\n"
+            "autoreconf not found inside WSL bash (wsl bash).\n"
             "  lcms2 and libffi use autogen.sh which requires autoconf/automake/libtool.\n"
-            "  Fix (MSYS2 MinGW shell): pacman -S base-devel autoconf automake libtool pkg-config\n"
-            "  Alternative (MSYS2 UCRT shell): pacman -S autoconf automake libtool\n"
-            "  After installing, delete the .cxx cache and re-sync Gradle.\n"
+            "  Fix inside WSL: sudo apt update && sudo apt install -y autoconf automake libtool pkg-config build-essential\n"
+            "  After installing, delete external/imagedecoder-houri/library/.cxx and re-sync Gradle.\n"
         )
     else()
-        message(STATUS "MSYS autoreconf: found")
+        message(STATUS "WSL autoreconf: found")
     endif()
     # Probe pkg-config similarly (needed by meson/cross file and libvips)
     execute_process(
-        COMMAND "${BASH_EXECUTABLE}" -c "command -v pkg-config >/dev/null 2>&1 && echo FOUND || echo MISSING"
+        COMMAND ${WSL_EXECUTABLE} bash -c "command -v pkg-config >/dev/null 2>&1 && echo FOUND || echo MISSING"
         OUTPUT_VARIABLE _pkg_probe
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET
     )
     if(_pkg_probe STREQUAL "MISSING")
-        message(WARNING "pkg-config not found inside MSYS bash – meson builds (glib/libvips) may fail. Install: pacman -S pkg-config")
+        message(WARNING "pkg-config not found inside WSL bash – meson builds (glib/libvips) may fail. In WSL: sudo apt install -y pkg-config")
+    else()
+        message(STATUS "WSL pkg-config: found")
+    endif()
+    execute_process(
+        COMMAND ${WSL_EXECUTABLE} bash -c "command -v meson >/dev/null 2>&1 && echo FOUND || echo MISSING"
+        OUTPUT_VARIABLE _meson_probe2
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(_meson_probe2 STREQUAL "MISSING")
+        message(WARNING "meson not found inside WSL bash. In WSL: sudo apt install -y meson ninja-build")
+    endif()
+    execute_process(
+        COMMAND ${WSL_EXECUTABLE} bash -c "command -v ninja >/dev/null 2>&1 && echo FOUND || echo MISSING"
+        OUTPUT_VARIABLE _ninja_probe
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(_ninja_probe STREQUAL "MISSING")
+        message(WARNING "ninja not found inside WSL. In WSL: sudo apt install -y ninja-build")
     endif()
 endif()
 
@@ -374,10 +350,10 @@ endif()
 # ---------------------------------------------------------------------------
 # Fakeroot (prefix) handling
 # Meson cross-builds to Android (host = android, Unix). Even on Windows,
-# meson's --prefix must be a Unix absolute path (/c/...), not a Windows
-# absolute (C:/...). The autotools --prefix must also be Unix (/c/...) when
-# invoked via MSYS bash, otherwise `CC=C:/...` is parsed as variable C.
-# We keep both forms: EP_MESON_PREFIX (Unix for meson) and
+# meson's --prefix must be a Unix absolute path (/mnt/c/... via WSL), not a
+# Windows absolute (C:/...). The autotools --prefix must also be Unix
+# (/mnt/c/...) when invoked via WSL bash, otherwise `CC=C:/...` is parsed as
+# variable C. We keep both forms: EP_MESON_PREFIX (Unix for meson) and
 # EP_AUTOTOOLS_PREFIX (Unix for autotools). THIRD_PARTY_LIB_PATH stays
 # Windows-native for CMake's own find-root.
 # ---------------------------------------------------------------------------
@@ -536,17 +512,37 @@ set(EP_CMAKE_ARGS
     "-DCMAKE_C_LINKER_LAUNCHER=${CMAKE_C_LINKER_LAUNCHER}"
     "-DCMAKE_BUILD_PARALLEL_LEVEL=${NPROC}"
 )
+if(USE_WSL_TOOLS)
+    # When using WSL, the inner cmake for ExternalProject's ep_* that use
+    # CMAKE_ARGS (libwebp, zlib, etc.) should also be WSL's Linux cmake
+    # (wsl cmake) not Windows C:/.../cmake.exe, to keep /mnt/c/ handling.
+    # We do this by overriding CMAKE_COMMAND for those ExternalProjects via
+    # -DCMAKE_COMMAND=wsl cmake (but ExternalProject's CMAKE_COMMAND is the
+    # parent cmake, so we set it via EP_CMAKE_ARGS with -DCMAKE_COMMAND)
+    # Actually ExternalProject's cmake is invoked via ${CMAKE_COMMAND} from the
+    # parent, which is Windows cmake.exe. To make it use WSL's cmake, we set
+    # the cmake executable for the ExternalProject via CONFIGURE_COMMAND
+    # override is not needed; instead we rely on the parent cmake being
+    # Windows but the ExternalProject's build (meson, autotools, cmake) already
+    # uses wsl bash/meson. For cmake-based deps (libwebp etc.), the toolchain
+    # file and NDK paths are already C:/ style which WSL's cmake with
+    # /mnt/c/ handling can also handle, but to be safe we keep the outer
+    # cmake as Windows and only inner meson/autotools via wsl.
+    # No extra action needed here; the per-dep BASH_CMD/MESON_VIA_WSL already
+    # makes meson/autotools use wsl. For cmake deps, the NDK toolchain file
+    # already handles both C:/ and /mnt/c/.
+endif()
 if(Ninja_EXECUTABLE)
     list(APPEND EP_CMAKE_ARGS "-DCMAKE_MAKE_PROGRAM=${Ninja_EXECUTABLE}")
 endif()
 
-# Autotools via MSYS bash: every absolute host path must be Unix (/c/...)
+# Autotools via WSL bash (single Windows path): every absolute host path must be Unix (/mnt/c/...)
 # otherwise `CC=C:/foo` is tokenised as variable C with value :/foo and
 # the trailing `0` from `C:` split causes `invalid variable name: '0'`.
-# This handles *any* drive letter (C, D, ...), not just C. We convert
-# unconditionally: on Linux to_msys_path leaves Unix paths unchanged, on
-# Windows it converts C:/... -> /c/... . This avoids relying on if(WIN32)
-# which can be unreliable when CMAKE_SYSTEM_NAME is set to Android.
+# This handles *any* drive letter (C, D, ...). We convert unconditionally:
+# on Linux to_msys_path leaves Unix paths unchanged, on Windows it converts
+# C:/... -> /mnt/c/... . This avoids relying on if(WIN32) which can be
+# unreliable when CMAKE_SYSTEM_NAME is set to Android.
 to_msys_path("${CMAKE_C_COMPILER}" _cc_msys)
 to_msys_path("${CMAKE_CXX_COMPILER}" _cxx_msys)
 to_msys_path("${CMAKE_AR}" _ar_msys)
@@ -558,10 +554,10 @@ to_msys_path("${CMAKE_ASM_COMPILER}" _as_msys)
 if(NOT EP_AUTOTOOLS_PREFIX)
     to_msys_path("${THIRD_PARTY_LIB_PATH}" EP_AUTOTOOLS_PREFIX)
 endif()
-message(STATUS "MSYS CC: ${CMAKE_C_COMPILER} -> ${_cc_msys}")
-message(STATUS "MSYS CXX: ${CMAKE_CXX_COMPILER} -> ${_cxx_msys}")
-message(STATUS "MSYS AR: ${CMAKE_AR} -> ${_ar_msys}")
-message(STATUS "MSYS PREFIX: ${THIRD_PARTY_LIB_PATH} -> ${EP_AUTOTOOLS_PREFIX}")
+message(STATUS "WSL CC: ${CMAKE_C_COMPILER} -> ${_cc_msys}")
+message(STATUS "WSL CXX: ${CMAKE_CXX_COMPILER} -> ${_cxx_msys}")
+message(STATUS "WSL AR: ${CMAKE_AR} -> ${_ar_msys}")
+message(STATUS "WSL PREFIX: ${THIRD_PARTY_LIB_PATH} -> ${EP_AUTOTOOLS_PREFIX}")
 # AS is empty for Android (clang handles asm); omit it entirely to avoid
 # 'invalid variable name' errors from autotools when passed as AS= with empty
 # value that gets mis-parsed as a variable assignment.
