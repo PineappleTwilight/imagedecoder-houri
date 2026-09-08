@@ -398,6 +398,9 @@ endif()
 # so we can use it unconditionally.
 # For WSL interop, also provide /mnt/c/ style path so that WSL's pkg-config
 # (which needs /mnt/c/) and MSYS pkg-config (which needs /c/) both find fk.
+# For NDK's Windows clang (C:/.../clang.exe) invoked from WSL's meson with
+# C:\... test files, also provide C:/ style for -I/-L so the linker finds
+# the static lib regardless of which path style the toolchain expects.
 set(_cross_inc "${EP_MESON_PREFIX}/include")
 set(_cross_lib "${EP_MESON_PREFIX}/lib")
 set(_cross_pkg "${_pkg_msys}")
@@ -408,6 +411,16 @@ endif()
 set(_cross_pkg_both "'${_cross_pkg}', '${_cross_pkg_wsl}'")
 # Use both for pkg_config_path; pkg_config_libdir is single but we can list both via colon
 set(_cross_pkg_libdir_both "${_cross_pkg}:${_cross_pkg_wsl}")
+# Windows style C:/... for NDK's Windows clang when invoked with C:\... test files
+set(_cross_inc_win "${THIRD_PARTY_LIB_PATH}/include")
+set(_cross_lib_win "${THIRD_PARTY_LIB_PATH}/lib")
+file(TO_CMAKE_PATH "${_cross_inc_win}" _cross_inc_win)
+file(TO_CMAKE_PATH "${_cross_lib_win}" _cross_lib_win)
+# WSL style for the same
+set(_cross_inc_wsl "${_cross_inc}")
+string(REGEX REPLACE "^/([a-z])/" "/mnt/\\1/" _cross_inc_wsl "${_cross_inc_wsl}")
+set(_cross_lib_wsl "${_cross_lib}")
+string(REGEX REPLACE "^/([a-z])/" "/mnt/\\1/" _cross_lib_wsl "${_cross_lib_wsl}")
 
 set(CROSS_FILE_CONTENT "
 [host_machine]
@@ -427,10 +440,10 @@ as = '${CMAKE_ASM_COMPILER}'
 pkg-config = 'pkg-config'
 
 [built-in options]
-c_args = ['-I${_cross_inc}', '-Wno-error=format-nonliteral']
-cpp_args = ['-I${_cross_inc}', '-Wno-error=format-nonliteral', '-DHAVE_POSIX_MEMALIGN']
-c_link_args = ['-L${_cross_lib}']
-cpp_link_args = ['-L${_cross_lib}']
+c_args = ['-I${_cross_inc}', '-I${_cross_inc_win}', '-I${_cross_inc_wsl}', '-Wno-error=format-nonliteral']
+cpp_args = ['-I${_cross_inc}', '-I${_cross_inc_win}', '-I${_cross_inc_wsl}', '-Wno-error=format-nonliteral', '-DHAVE_POSIX_MEMALIGN']
+c_link_args = ['-L${_cross_lib}', '-L${_cross_lib_win}', '-L${_cross_lib_wsl}']
+cpp_link_args = ['-L${_cross_lib}', '-L${_cross_lib_win}', '-L${_cross_lib_wsl}']
 pkg_config_path = [${_cross_pkg_both}]
 
 [properties]
@@ -588,8 +601,12 @@ fi
 cd "$src"
 make -j1 install V=1
 mkdir -p "$prefix_in/lib/pkgconfig"
+# For .pc file, use Windows style C:/... so pkg-config outputs C:/... for NDK's Windows clang
+# (which understands C:/ but not always /c/ when invoked from WSL's meson with C:\ test files)
+prefix_win="$prefix_in"
+if command -v cygpath >/dev/null 2>&1; then prefix_win=$(cygpath -w "$prefix_in" 2>/dev/null || echo "$prefix_in"); prefix_win=$(echo "$prefix_win" | sed 's|\\|/|g'); fi
 cat > "$prefix_in/lib/pkgconfig/iconv.pc" <<EOF
-prefix=$prefix_in
+prefix=$prefix_win
 exec_prefix=\${prefix}
 libdir=\${exec_prefix}/lib
 includedir=\${prefix}/include
@@ -601,6 +618,12 @@ Libs: -L\${libdir} -liconv -lcharset
 Cflags: -I\${includedir}
 EOF
 cp "$prefix_in/lib/pkgconfig/iconv.pc" "$prefix_in/lib/pkgconfig/libiconv.pc"
+# Also ensure the .pc is found via both MSYS and WSL pkg-config by duplicating with mnt path if needed
+if [[ "$prefix_in" == /c/* ]]; then
+  mkdir -p "/mnt${prefix_in}/lib/pkgconfig" 2>/dev/null || true
+  cp "$prefix_in/lib/pkgconfig/iconv.pc" "/mnt${prefix_in}/lib/pkgconfig/iconv.pc" 2>/dev/null || true
+  cp "$prefix_in/lib/pkgconfig/iconv.pc" "/mnt${prefix_in}/lib/pkgconfig/libiconv.pc" 2>/dev/null || true
+fi
 ]=])
 execute_process(COMMAND ${CMAKE_COMMAND} -E chmod +x "${INSTALL_ICONV_HELPER}")
 to_msys_path("${INSTALL_ICONV_HELPER}" INSTALL_ICONV_HELPER_MSYS)
