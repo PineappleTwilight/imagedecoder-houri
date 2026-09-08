@@ -393,13 +393,15 @@ else()
         "  This is set by AGP's externalNativeBuild; if configuring manually, pass -DANDROID_ABI=arm64-v8a")
 endif()
 
-# Cross file: for cross builds (host=android) include/lib paths must be Unix
-# even on Windows. EP_MESON_PREFIX is already converted via to_msys_path,
-# so we can use it unconditionally.
-# For WSL interop, also provide /mnt/c/ style path so that WSL's pkg-config
-# (which needs /mnt/c/) and MSYS pkg-config (which needs /c/) both find fk.
-set(_cross_inc "${EP_MESON_PREFIX}/include")
-set(_cross_lib "${EP_MESON_PREFIX}/lib")
+# Cross file: for cross builds (host=android). Use Windows C:/ style for
+# c_args/c_link_args so NDK's Windows clang (C:/.../clang.exe) invoked from
+# WSL's meson with C:\... test files can find the headers/libs. Use both
+# /c/ and /mnt/c/ for pkg_config_path so whichever pkg-config binary meson
+# finds (MSYS /c/ or WSL /mnt/c/) locates fk/lib/pkgconfig/iconv.pc.
+set(_cross_inc "${THIRD_PARTY_LIB_PATH}/include")
+set(_cross_lib "${THIRD_PARTY_LIB_PATH}/lib")
+file(TO_CMAKE_PATH "${_cross_inc}" _cross_inc)
+file(TO_CMAKE_PATH "${_cross_lib}" _cross_lib)
 set(_cross_pkg "${_pkg_msys}")
 set(_cross_pkg_wsl "${_pkg_msys}")
 if(_cross_pkg_wsl MATCHES "^/([a-z])/")
@@ -588,8 +590,12 @@ fi
 cd "$src"
 make -j1 install V=1
 mkdir -p "$prefix_in/lib/pkgconfig"
+# Use Windows C:/ style for .pc prefix so pkg-config emits C:/ for NDK's Windows clang
+# (which is invoked as C:/.../clang++.exe with C:\... test files from WSL's meson)
+prefix_win="$prefix_in"
+if command -v cygpath >/dev/null 2>&1; then prefix_win=$(cygpath -w "$prefix_in" 2>/dev/null || echo "$prefix_in"); prefix_win=$(echo "$prefix_win" | sed 's|\\|/|g'); fi
 cat > "$prefix_in/lib/pkgconfig/iconv.pc" <<EOF
-prefix=$prefix_in
+prefix=$prefix_win
 exec_prefix=\${prefix}
 libdir=\${exec_prefix}/lib
 includedir=\${prefix}/include
