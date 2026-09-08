@@ -495,73 +495,7 @@ set(_cross_pkg_both "'${_cross_pkg}', '${_cross_pkg_wsl}'")
 # Use both for pkg_config_path; pkg_config_libdir is single but we can list both via colon
 set(_cross_pkg_libdir_both "${_cross_pkg}:${_cross_pkg_wsl}")
 
-if(IS_HOST_WINDOWS)
-  # For wsl meson, use /mnt/c/... Unix paths for compilers (C:/ not found inside WSL)
-  set(_cross_c "${_cc_msys}")
-  set(_cross_cpp "${_cxx_msys}")
-  set(_cross_ar "${_ar_msys}")
-  set(_cross_ld "${_ld_msys}")
-  set(_cross_strip "${_strip_msys}")
-  set(_cross_ranlib "${_ranlib_msys}")
-  set(_cross_as "${_as_msys}")
-else()
-  set(_cross_c "${CMAKE_C_COMPILER}")
-  set(_cross_cpp "${CMAKE_CXX_COMPILER}")
-  set(_cross_ar "${CMAKE_AR}")
-  set(_cross_ld "${CMAKE_LINKER}")
-  set(_cross_strip "${CMAKE_STRIP}")
-  set(_cross_ranlib "${CMAKE_RANLIB}")
-  set(_cross_as "${CMAKE_ASM_COMPILER}")
-endif()
-set(CROSS_FILE_CONTENT "
-[host_machine]
-system = 'android'
-cpu_family = '${ANDROID_CPU_FAMILY}'
-cpu = '${ANDROID_CPU}'
-endian = '${ANDROID_CPU_ENDIANESS}'
-
-[binaries]
-c = ['${_cross_c}', '--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}']
-cpp = ['${_cross_cpp}', '--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}']
-ar = '${_cross_ar}'
-ld = '${_cross_ld}'
-strip = '${_cross_strip}'
-ranlib = '${_cross_ranlib}'
-as = '${_cross_as}'
-pkg-config = 'pkg-config'
-
-[built-in options]
-c_args = ['-I${_cross_inc}', '-Wno-error=format-nonliteral']
-cpp_args = ['-I${_cross_inc}', '-Wno-error=format-nonliteral', '-DHAVE_POSIX_MEMALIGN']
-c_link_args = ['-L${_cross_lib}']
-cpp_link_args = ['-L${_cross_lib}']
-pkg_config_path = [${_cross_pkg_both}]
-
-[properties]
-cmake_toolchain_file = '${CMAKE_TOOLCHAIN_FILE}'
-pkg_config_libdir = '${_cross_pkg_libdir_both}'
-
-[cmake]
-CMAKE_BUILD_WITH_INSTALL_RPATH = 'ON'
-CMAKE_FIND_ROOT_PATH_MODE_PROGRAM = 'NEVER'
-CMAKE_FIND_ROOT_PATH_MODE_LIBRARY = 'ONLY'
-CMAKE_FIND_ROOT_PATH_MODE_INCLUDE = 'ONLY'
-CMAKE_FIND_ROOT_PATH_MODE_PACKAGE = 'ONLY'
-")
-
-# Generate the cross-file
-set(MESON_CROSS_FILE_PATH "${CMAKE_BINARY_DIR}/android-cross-file.txt")
-file(WRITE ${MESON_CROSS_FILE_PATH} "${CROSS_FILE_CONTENT}")
-message(STATUS "Wrote Meson cross file: ${MESON_CROSS_FILE_PATH}")
-# For WSL, meson needs Unix /mnt/c/... path, not C:/...
-to_msys_path("${MESON_CROSS_FILE_PATH}" MESON_CROSS_FILE_PATH_WSL)
-# Fix CRLF for cross file (file(WRITE) on Windows writes CRLF)
-if(IS_HOST_WINDOWS)
-  execute_process(COMMAND ${WSL_EXECUTABLE} bash -c "tr -d '\\015' < \"${MESON_CROSS_FILE_PATH_WSL}\" > \"${MESON_CROSS_FILE_PATH_WSL}.tmp\" && mv \"${MESON_CROSS_FILE_PATH_WSL}.tmp\" \"${MESON_CROSS_FILE_PATH_WSL}\" || true" ERROR_QUIET)
-  execute_process(COMMAND ${WSL_EXECUTABLE} bash -c "tr -d '\\015' < \"${MESON_CROSS_FILE_PATH}\" > \"${MESON_CROSS_FILE_PATH}.tmp\" && mv \"${MESON_CROSS_FILE_PATH}.tmp\" \"${MESON_CROSS_FILE_PATH}\" || true" ERROR_QUIET)
-else()
-  execute_process(COMMAND bash -c "tr -d '\\015' < \"${MESON_CROSS_FILE_PATH}\" > \"${MESON_CROSS_FILE_PATH}.tmp\" && mv \"${MESON_CROSS_FILE_PATH}.tmp\" \"${MESON_CROSS_FILE_PATH}\" || true" ERROR_QUIET)
-endif()
+# Cross file content will be set after _cc_msys etc. are defined via to_msys_path (below) - moved to after to_msys_path
 
 # Detect CPU count for parallel builds
 include(ProcessorCount)
@@ -683,6 +617,79 @@ endif()
 # Space-separated version for use inside bash -c " ... ${EP_AUTOTOOLS_ARGS_STR} ..."
 # (CMake lists are ; separated, but inside a bash string they need to be space separated)
 string(REPLACE ";" " " EP_AUTOTOOLS_ARGS_STR "${EP_AUTOTOOLS_ARGS}")
+
+# Cross file: uses _cc_msys etc. which are now defined via to_msys_path above
+if(IS_HOST_WINDOWS)
+  set(_cross_c "${_cc_msys}")
+  set(_cross_cpp "${_cxx_msys}")
+  set(_cross_ar "${_ar_msys}")
+  set(_cross_ld "${_ld_msys}")
+  set(_cross_strip "${_strip_msys}")
+  set(_cross_ranlib "${_ranlib_msys}")
+  set(_cross_as "${_as_msys}")
+else()
+  set(_cross_c "${CMAKE_C_COMPILER}")
+  set(_cross_cpp "${CMAKE_CXX_COMPILER}")
+  set(_cross_ar "${CMAKE_AR}")
+  set(_cross_ld "${CMAKE_LINKER}")
+  set(_cross_strip "${CMAKE_STRIP}")
+  set(_cross_ranlib "${CMAKE_RANLIB}")
+  set(_cross_as "${CMAKE_ASM_COMPILER}")
+endif()
+set(CROSS_FILE_CONTENT "
+[host_machine]
+system = 'android'
+cpu_family = '${ANDROID_CPU_FAMILY}'
+cpu = '${ANDROID_CPU}'
+endian = '${ANDROID_CPU_ENDIANESS}'
+
+[binaries]
+c = ['${_cross_c}', '--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}']
+cpp = ['${_cross_cpp}', '--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}']
+ar = '${_cross_ar}'
+ld = '${_cross_ld}'
+strip = '${_cross_strip}'
+ranlib = '${_cross_ranlib}'
+as = '${_cross_as}'
+pkg-config = 'pkg-config'
+
+[built-in options]
+c_args = ['-I${_cross_inc}', '-Wno-error=format-nonliteral']
+cpp_args = ['-I${_cross_inc}', '-Wno-error=format-nonliteral', '-DHAVE_POSIX_MEMALIGN']
+c_link_args = ['-L${_cross_lib}']
+cpp_link_args = ['-L${_cross_lib}']
+pkg_config_path = [${_cross_pkg_both}]
+
+[properties]
+cmake_toolchain_file = '${CMAKE_TOOLCHAIN_FILE}'
+pkg_config_libdir = '${_cross_pkg_libdir_both}'
+
+[cmake]
+CMAKE_BUILD_WITH_INSTALL_RPATH = 'ON'
+CMAKE_FIND_ROOT_PATH_MODE_PROGRAM = 'NEVER'
+CMAKE_FIND_ROOT_PATH_MODE_LIBRARY = 'ONLY'
+CMAKE_FIND_ROOT_PATH_MODE_INCLUDE = 'ONLY'
+CMAKE_FIND_ROOT_PATH_MODE_PACKAGE = 'ONLY'
+")
+
+# Generate the cross-file
+set(MESON_CROSS_FILE_PATH "${CMAKE_BINARY_DIR}/android-cross-file.txt")
+file(WRITE ${MESON_CROSS_FILE_PATH} "${CROSS_FILE_CONTENT}")
+message(STATUS "Wrote Meson cross file: ${MESON_CROSS_FILE_PATH}")
+# For WSL, meson needs Unix /mnt/c/... path, not C:/...
+to_msys_path("${MESON_CROSS_FILE_PATH}" MESON_CROSS_FILE_PATH_WSL)
+# Fix CRLF for cross file (file(WRITE) on Windows writes CRLF)
+if(IS_HOST_WINDOWS)
+  execute_process(COMMAND ${WSL_EXECUTABLE} bash -c "tr -d '\\015' < \"${MESON_CROSS_FILE_PATH_WSL}\" > \"${MESON_CROSS_FILE_PATH_WSL}.tmp\" && mv \"${MESON_CROSS_FILE_PATH_WSL}.tmp\" \"${MESON_CROSS_FILE_PATH_WSL}\" || true" ERROR_QUIET)
+  execute_process(COMMAND ${WSL_EXECUTABLE} bash -c "tr -d '\\015' < \"${MESON_CROSS_FILE_PATH}\" > \"${MESON_CROSS_FILE_PATH}.tmp\" && mv \"${MESON_CROSS_FILE_PATH}.tmp\" \"${MESON_CROSS_FILE_PATH}\" || true" ERROR_QUIET)
+else()
+  execute_process(COMMAND bash -c "tr -d '\\015' < \"${MESON_CROSS_FILE_PATH}\" > \"${MESON_CROSS_FILE_PATH}.tmp\" && mv \"${MESON_CROSS_FILE_PATH}.tmp\" \"${MESON_CROSS_FILE_PATH}\" || true" ERROR_QUIET)
+endif()
+
+# Detect CPU count for parallel builds
+# Escape ';' (already handled above, EP_MESON_ARGS set after CROSS_FILE_CONTENT)
+string(REPLACE ";" "$<SEMICOLON>" CMAKE_FIND_ROOT_PATH_STR "${CMAKE_FIND_ROOT_PATH}")
+string(REPLACE ";" "$<SEMICOLON>" CMAKE_FIND_LIBRARY_SUFFIXES_STR "${CMAKE_FIND_LIBRARY_SUFFIXES}")
 
 # ---------------------------------------------------------------------------
 # Autotools helper scripts (Windows MSYS cygpath handling)
