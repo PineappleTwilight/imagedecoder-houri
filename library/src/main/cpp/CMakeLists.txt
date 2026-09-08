@@ -565,7 +565,34 @@ execute_process(COMMAND ${CMAKE_COMMAND} -E chmod +x "${CONFIGURE_ICONV_HELPER}"
 to_msys_path("${CONFIGURE_ICONV_HELPER}" CONFIGURE_ICONV_HELPER_MSYS)
 
 set(INSTALL_ICONV_HELPER "${CMAKE_BINARY_DIR}/install_iconv.sh")
-file(WRITE "${INSTALL_ICONV_HELPER}" "#!/usr/bin/env bash\nset -e\nsrc=\"$1\"\nshift\nif [[ \"$src\" =~ ^[A-Za-z]:/ ]]; then\n  if command -v cygpath >/dev/null 2>&1; then src=$(cygpath -u \"$src\"); elif command -v wslpath >/dev/null 2>&1; then src=$(wslpath -u \"$src\" 2>/dev/null || echo \"$src\"); fi\nfi\nprefix_in=\"$1\"\nif [[ \"$prefix_in\" =~ ^[A-Za-z]:/ ]]; then\n  if command -v cygpath >/dev/null 2>&1; then prefix_in=$(cygpath -u \"$prefix_in\" 2>/dev/null || echo \"$prefix_in\"); elif command -v wslpath >/dev/null 2>&1; then prefix_in=$(wslpath -u \"$prefix_in\" 2>/dev/null || echo \"$prefix_in\"); fi\nfi\ncd \"$src\"\nmake -j1 install V=1\nmkdir -p \"$prefix_in/lib/pkgconfig\"\ncat > \"$prefix_in/lib/pkgconfig/iconv.pc\" <<EOF\nprefix=$prefix_in\nexec_prefix=\\${prefix}\nlibdir=\\${exec_prefix}/lib\nincludedir=\\${prefix}/include\n\nName: iconv\nDescription: libiconv\nVersion: 1.17\nLibs: -L\\${libdir} -liconv -lcharset\nCflags: -I\\${includedir}\nEOF\ncp \"$prefix_in/lib/pkgconfig/iconv.pc\" \"$prefix_in/lib/pkgconfig/libiconv.pc\"\n")
+file(WRITE "${INSTALL_ICONV_HELPER}" [=[#!/usr/bin/env bash
+set -e
+src="$1"
+shift
+if [[ "$src" =~ ^[A-Za-z]:/ ]]; then
+  if command -v cygpath >/dev/null 2>&1; then src=$(cygpath -u "$src"); elif command -v wslpath >/dev/null 2>&1; then src=$(wslpath -u "$src" 2>/dev/null || echo "$src"); fi
+fi
+prefix_in="$1"
+if [[ "$prefix_in" =~ ^[A-Za-z]:/ ]]; then
+  if command -v cygpath >/dev/null 2>&1; then prefix_in=$(cygpath -u "$prefix_in" 2>/dev/null || echo "$prefix_in"); elif command -v wslpath >/dev/null 2>&1; then prefix_in=$(wslpath -u "$prefix_in" 2>/dev/null || echo "$prefix_in"); fi
+fi
+cd "$src"
+make -j1 install V=1
+mkdir -p "$prefix_in/lib/pkgconfig"
+cat > "$prefix_in/lib/pkgconfig/iconv.pc" <<EOF
+prefix=$prefix_in
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+
+Name: iconv
+Description: libiconv
+Version: 1.17
+Libs: -L\${libdir} -liconv -lcharset
+Cflags: -I\${includedir}
+EOF
+cp "$prefix_in/lib/pkgconfig/iconv.pc" "$prefix_in/lib/pkgconfig/libiconv.pc"
+]=])
 execute_process(COMMAND ${CMAKE_COMMAND} -E chmod +x "${INSTALL_ICONV_HELPER}")
 to_msys_path("${INSTALL_ICONV_HELPER}" INSTALL_ICONV_HELPER_MSYS)
 
