@@ -396,9 +396,18 @@ endif()
 # Cross file: for cross builds (host=android) include/lib paths must be Unix
 # even on Windows. EP_MESON_PREFIX is already converted via to_msys_path,
 # so we can use it unconditionally.
+# For WSL interop, also provide /mnt/c/ style path so that WSL's pkg-config
+# (which needs /mnt/c/) and MSYS pkg-config (which needs /c/) both find fk.
 set(_cross_inc "${EP_MESON_PREFIX}/include")
 set(_cross_lib "${EP_MESON_PREFIX}/lib")
 set(_cross_pkg "${_pkg_msys}")
+set(_cross_pkg_wsl "${_pkg_msys}")
+if(_cross_pkg_wsl MATCHES "^/([a-z])/")
+  string(REGEX REPLACE "^/([a-z])/" "/mnt/\\1/" _cross_pkg_wsl "${_cross_pkg_wsl}")
+endif()
+set(_cross_pkg_both "'${_cross_pkg}', '${_cross_pkg_wsl}'")
+# Use both for pkg_config_path; pkg_config_libdir is single but we can list both via colon
+set(_cross_pkg_libdir_both "${_cross_pkg}:${_cross_pkg_wsl}")
 
 set(CROSS_FILE_CONTENT "
 [host_machine]
@@ -422,11 +431,11 @@ c_args = ['-I${_cross_inc}', '-Wno-error=format-nonliteral']
 cpp_args = ['-I${_cross_inc}', '-Wno-error=format-nonliteral', '-DHAVE_POSIX_MEMALIGN']
 c_link_args = ['-L${_cross_lib}']
 cpp_link_args = ['-L${_cross_lib}']
-pkg_config_path = ['${_cross_pkg}']
+pkg_config_path = [${_cross_pkg_both}]
 
 [properties]
 cmake_toolchain_file = '${CMAKE_TOOLCHAIN_FILE}'
-pkg_config_libdir = '${_cross_pkg}'
+pkg_config_libdir = '${_cross_pkg_libdir_both}'
 
 [cmake]
 CMAKE_BUILD_WITH_INSTALL_RPATH = 'ON'
