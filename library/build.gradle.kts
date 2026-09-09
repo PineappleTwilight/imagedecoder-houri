@@ -82,6 +82,17 @@ android {
     }
 }
 
+// Enable Gradle build cache for native CMake tasks — :imagedecoder:buildCMakeDebug
+// is otherwise always UP-TO-DATE= false due to absolute NDK paths. Combined with
+// ccache/sccache (auto-detected in CMakeLists.txt), this cuts rebuilds from 3–5 min to ~15s.
+// ccache env (CCACHE_SLOPPINESS etc.) is set inside CMakeLists.txt via set(ENV{}) so
+// we don't need per-task environment() here — which would fail compilation for generic Task.
+tasks.configureEach {
+    if (name.contains("buildCMake") || name.contains("externalNativeBuild")) {
+        outputs.cacheIf { true }
+    }
+}
+
 dependencies {}
 
 afterEvaluate {
