@@ -567,6 +567,37 @@ endif()
 if(Ninja_EXECUTABLE)
     list(APPEND EP_CMAKE_ARGS "-DCMAKE_MAKE_PROGRAM=${Ninja_EXECUTABLE}")
 endif()
+# WSL pkg-config for ep_imagedecoder (library/src/main/cpp/imagedecoder/CMakeLists.txt does find_package(PkgConfig REQUIRED)).
+# Host cmake is Windows (C:/.../cmake.exe) and has no native pkg-config.exe on PATH. Provide a
+# wrapper .bat that forwards to WSL's /usr/bin/pkg-config, and pass it to inner cmake via EP_CMAKE_ARGS.
+# This must be before any ExternalProject_Add that uses CMAKE_ARGS.
+if(IS_HOST_WINDOWS)
+  if(NOT WRAPPER_DIR)
+    set(WRAPPER_DIR "${CMAKE_BINARY_DIR}/wrappers")
+    file(MAKE_DIRECTORY "${WRAPPER_DIR}")
+  endif()
+  set(_pkg_wrapper_win "${WRAPPER_DIR}/pkg-config.bat")
+  # Two-part wrapper: Windows .bat -> WSL bash helper that translates output.
+  # Inner ep_imagedecoder sets ENV{PKG_CONFIG_PATH}=C:/.../fk/lib/pkgconfig (Windows style) but WSL's pkg-config
+  # reads pc files installed by meson with prefix=/mnt/c/... (Linux style, because EP_MESON_PREFIX is /mnt/c/... when
+  # _use_linux_ndk). So WSL pkg-config emits -I/mnt/c/... which Windows clang.exe cannot resolve (needs C:/).
+  # The helper translates /mnt/c/ -> C:/ on the way out so Windows clang gets C:/ includes. Meson's own pkg-config
+  # (direct wsl /usr/bin/pkg-config, not via this wrapper) keeps /mnt/c/ for Linux clang — so both toolchains work.
+  set(_pkg_wrapper_sh "${WRAPPER_DIR}/pkg-config-wsl.sh")
+  file(WRITE "${_pkg_wrapper_sh}" "#!/usr/bin/env bash\nset -e\n# Run real pkg-config, then translate WSL /mnt/c/... back to Windows C:/... for Windows clang\n/usr/bin/pkg-config \"$@\" | sed -E 's|/mnt/([a-zA-Z])/|\\1:/|g'\n")
+  execute_process(COMMAND ${CMAKE_COMMAND} -E chmod +x "${_pkg_wrapper_sh}")
+  to_msys_path("${_pkg_wrapper_sh}" _pkg_wrapper_sh_wsl)
+  if(IS_HOST_WINDOWS)
+    execute_process(COMMAND ${WSL_EXECUTABLE} bash -c "tr -d '\\015' < \"${_pkg_wrapper_sh_wsl}\" > \"${_pkg_wrapper_sh_wsl}.tmp\" && mv \"${_pkg_wrapper_sh_wsl}.tmp\" \"${_pkg_wrapper_sh_wsl}\" && chmod +x \"${_pkg_wrapper_sh_wsl}\" || true" ERROR_QUIET)
+  endif()
+  # Batch wrapper: forwards PKG_CONFIG_PATH/LIBDIR to WSL with /p path translation (C:/ -> /mnt/c/) on the way in,
+  # then the bash helper translates /mnt/c/ -> C:/ on the way out for Windows clang.
+  file(WRITE "${_pkg_wrapper_win}" "@echo off\r\nsetlocal\r\nset WSLENV=PKG_CONFIG_PATH/p:PKG_CONFIG_LIBDIR/p:PKG_CONFIG_SYSTEM_LIBRARY_PATH/p:PKG_CONFIG_SYSTEM_INCLUDE_PATH/p\r\nwsl bash \"${_pkg_wrapper_sh_wsl}\" %*\r\n")
+  # Cache so find_package(PkgConfig) in any subdir finds it without searching PATH
+  set(PKG_CONFIG_EXECUTABLE "${_pkg_wrapper_win}" CACHE FILEPATH "WSL pkg-config wrapper (Windows host)" FORCE)
+  list(APPEND EP_CMAKE_ARGS "-DPKG_CONFIG_EXECUTABLE=${PKG_CONFIG_EXECUTABLE}")
+  message(STATUS "Using WSL pkg-config wrapper for host cmake: ${PKG_CONFIG_EXECUTABLE}")
+endif()
 
 # When building via WSL, prefer Linux NDK toolchain inside WSL if available.
 # Windows NDK's windows-x86_64/bin/clang.exe is a PE that cannot be executed
@@ -626,6 +657,12 @@ message(STATUS "WSL CC: ${CMAKE_C_COMPILER} -> ${_cc_msys}")
 message(STATUS "WSL CXX: ${CMAKE_CXX_COMPILER} -> ${_cxx_msys}")
 message(STATUS "WSL AR: ${CMAKE_AR} -> ${_ar_msys}")
 message(STATUS "WSL PREFIX: ${THIRD_PARTY_LIB_PATH} -> ${EP_AUTOTOOLS_PREFIX}")
+# WSLENV forwarding: cmake -E env before wsl.exe does NOT reach Linux unless
+# listed in WSLENV. libffi's config.log showed CCAS='gcc' (host) because
+# CC/CCAS never arrived in WSL. Forward all autotools/meson env vars.
+# No /p flag - CC is already Linux /usr/... path when _use_linux_ndk, not Windows.
+set(WSL_ENV_FORWARD "CC:CCAS:CFLAGS:CCASFLAGS:CXX:CXXFLAGS:AR:LD:RANLIB:STRIP:PKG_CONFIG_PATH:PKG_CONFIG_LIBDIR:gl_cv_func_nl_langinfo_codeset:am_cv_langinfo_codeset")
+
 # When using Linux NDK, autotools should also use the Linux tools (native ELF, not Windows PE)
 # because inside WSL's bash, the Windows clang.exe cannot handle /tmp files and --target correctly for aarch64.
 # Use the Linux cross tools for autotools as well when _use_linux_ndk is TRUE.
@@ -862,6 +899,13 @@ if(_use_linux_ndk)
   # Also ensure pkg_config paths are WSL Unix (they already are via _cross_pkg_both which has both)
   message(STATUS "Linux NDK c_args will use WSL paths: -I${_cross_inc} -L${_cross_lib}")
 endif()
+# Linux NDK: pkg-config's .pc files were installed with prefix=C:/... (e.g. libopenjp2.pc Cflags: -I${includedir}/openjpeg-2.5)
+# which meson forwards as -IC:/... . Linux clang can't resolve C:/, so also add the WSL
+# /mnt/c/... counterpart to c_args so <openjpeg.h> is found regardless of which form meson emits.
+set(_extra_c_args "")
+if(_use_linux_ndk)
+  set(_extra_c_args "', '-I${_cross_inc}/openjpeg-2.5")
+endif()
 set(CROSS_FILE_CONTENT "
 [host_machine]
 system = 'android'
@@ -880,8 +924,8 @@ as = '${_cross_as}'
 pkg-config = 'pkg-config'
 
 [built-in options]
-c_args = ['-I${_cross_inc}', '-Wno-error=format-nonliteral']
-cpp_args = ['-I${_cross_inc}', '-Wno-error=format-nonliteral', '-DHAVE_POSIX_MEMALIGN']
+c_args = ['-I${_cross_inc}${_extra_c_args}', '-Wno-error=format-nonliteral']
+cpp_args = ['-I${_cross_inc}${_extra_c_args}', '-Wno-error=format-nonliteral', '-DHAVE_POSIX_MEMALIGN']
 c_link_args = ['-L${_cross_lib}']
 cpp_link_args = ['-L${_cross_lib}']
 pkg_config_path = [${_cross_pkg_both}]
