@@ -528,6 +528,10 @@ string(REPLACE ";" "$<SEMICOLON>" CMAKE_FIND_ROOT_PATH_STR "${CMAKE_FIND_ROOT_PA
 string(REPLACE ";" "$<SEMICOLON>" CMAKE_FIND_LIBRARY_SUFFIXES_STR "${CMAKE_FIND_LIBRARY_SUFFIXES}")
 
 # Common args to all CMake ExternalProjects
+# Suppress benign warnings from vendored C/C++ deps (libjxl, libheif, glib, etc.)
+# so the build log is warning-free. These are upstream issues, not our code.
+set(EXTERNAL_C_SUPPRESS_FLAGS "-Wno-frame-larger-than -Wno-shorten-64-to-32 -Wno-tautological-constant-out-of-range-compare -Wno-typedef-redefinition -Wno-macro-redefined -Wno-overlength-strings -Wno-sign-compare -Wno-implicit-fallthrough -Wno-deprecated-declarations -Wno-unused-parameter -Wno-missing-field-initializers -Wno-unused-command-line-argument")
+set(EXTERNAL_CXX_SUPPRESS_FLAGS "-Wno-frame-larger-than -Wno-shorten-64-to-32 -Wno-tautological-constant-out-of-range-compare -Wno-typedef-redefinition -Wno-macro-redefined -Wno-overlength-strings -Wno-sign-compare -Wno-implicit-fallthrough -Wno-deprecated-declarations -Wno-unused-parameter -Wno-missing-field-initializers -Wno-unused-command-line-argument")
 set(EP_CMAKE_ARGS
     "-DANDROID_ABI=${ANDROID_ABI}"
     "-DANDROID_PLATFORM=${ANDROID_PLATFORM}"
@@ -543,6 +547,9 @@ set(EP_CMAKE_ARGS
     "-DCMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER}"
     "-DCMAKE_C_LINKER_LAUNCHER=${CMAKE_C_LINKER_LAUNCHER}"
     "-DCMAKE_BUILD_PARALLEL_LEVEL=${NPROC}"
+    "-DCMAKE_C_FLAGS=${EXTERNAL_C_SUPPRESS_FLAGS}"
+    "-DCMAKE_CXX_FLAGS=${EXTERNAL_CXX_SUPPRESS_FLAGS}"
+    "-DCMAKE_ASM_NASM_FLAGS=-w-"
 )
 if(USE_WSL_TOOLS)
     # When using WSL, the inner cmake for ExternalProject's ep_* that use
@@ -696,14 +703,15 @@ endif()
 # AS is empty for Android (clang handles asm); omit it entirely to avoid
 # 'invalid variable name' errors from autotools when passed as AS= with empty
 # value that gets mis-parsed as a variable assignment.
+set(EXTERNAL_AUTOTOOLS_SUPPRESS_FLAGS "-Wno-frame-larger-than -Wno-shorten-64-to-32 -Wno-tautological-constant-out-of-range-compare -Wno-typedef-redefinition -Wno-macro-redefined -Wno-overlength-strings -Wno-sign-compare -Wno-implicit-fallthrough -Wno-deprecated-declarations -Wno-unused-parameter -Wno-missing-field-initializers")
 set(EP_AUTOTOOLS_ARGS
     "--host=${ANDROID_TARGET}"
     "CC=${_autotools_cc}"
-    "CFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
+    "CFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL} ${EXTERNAL_AUTOTOOLS_SUPPRESS_FLAGS}"
     "CXX=${_autotools_cxx}"
-    "CXXFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
+    "CXXFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL} ${EXTERNAL_AUTOTOOLS_SUPPRESS_FLAGS}"
     "CCAS=${_autotools_cc}"
-    "CCASFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
+    "CCASFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL} ${EXTERNAL_AUTOTOOLS_SUPPRESS_FLAGS}"
     "AR=${_autotools_ar}"
     "LD=${_autotools_ld}"
     "RANLIB=${_autotools_ranlib}"
@@ -924,8 +932,8 @@ as = '${_cross_as}'
 pkg-config = 'pkg-config'
 
 [built-in options]
-c_args = ['-I${_cross_inc}${_extra_c_args}', '-Wno-error=format-nonliteral']
-cpp_args = ['-I${_cross_inc}${_extra_c_args}', '-Wno-error=format-nonliteral', '-DHAVE_POSIX_MEMALIGN']
+c_args = ['-I${_cross_inc}${_extra_c_args}', '-Wno-error=format-nonliteral', '-Wno-frame-larger-than', '-Wno-shorten-64-to-32', '-Wno-tautological-constant-out-of-range-compare', '-Wno-typedef-redefinition', '-Wno-macro-redefined', '-Wno-overlength-strings', '-Wno-sign-compare', '-Wno-implicit-fallthrough', '-Wno-deprecated-declarations', '-Wno-unused-parameter', '-Wno-missing-field-initializers']
+cpp_args = ['-I${_cross_inc}${_extra_c_args}', '-Wno-error=format-nonliteral', '-Wno-frame-larger-than', '-Wno-shorten-64-to-32', '-Wno-tautological-constant-out-of-range-compare', '-Wno-typedef-redefinition', '-Wno-macro-redefined', '-Wno-overlength-strings', '-Wno-sign-compare', '-Wno-implicit-fallthrough', '-Wno-deprecated-declarations', '-Wno-unused-parameter', '-Wno-missing-field-initializers', '-DHAVE_POSIX_MEMALIGN=1']
 c_link_args = ['-L${_cross_lib}']
 cpp_link_args = ['-L${_cross_lib}']
 pkg_config_path = [${_cross_pkg_both}]
