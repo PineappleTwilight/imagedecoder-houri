@@ -8,6 +8,63 @@ endif()
 project("imagedecoder_s")
 
 # ---------------------------------------------------------------------------
+# ccache / sccache — accelerate :imagedecoder:buildCMakeDebug (incremental native
+# builds). If ccache/sccache is on PATH, use it as compiler launcher for both
+# host cmake and all ExternalProjects (via EP_CMAKE_ARGS). Gracefully no-ops if
+# not installed. WSL on Windows also probes inside WSL (wsl which ccache).
+# ---------------------------------------------------------------------------
+if(NOT CMAKE_C_COMPILER_LAUNCHER AND NOT CMAKE_CXX_COMPILER_LAUNCHER)
+  find_program(CCACHE_PROGRAM ccache)
+  if(NOT CCACHE_PROGRAM)
+    find_program(CCACHE_PROGRAM sccache)
+  endif()
+  # Windows host: also probe inside WSL where ExternalProjects actually compile
+  if(NOT CCACHE_PROGRAM AND EXISTS "C:/Windows/System32/wsl.exe")
+    execute_process(COMMAND wsl which ccache OUTPUT_VARIABLE _wsl_ccache OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(_wsl_ccache AND NOT _wsl_ccache MATCHES "not found")
+      set(CCACHE_PROGRAM "${_wsl_ccache}")
+      message(STATUS "Found WSL ccache at ${CCACHE_PROGRAM} (for ExternalProjects via WSL)")
+    else()
+      execute_process(COMMAND wsl which sccache OUTPUT_VARIABLE _wsl_sccache OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+      if(_wsl_sccache AND NOT _wsl_sccache MATCHES "not found")
+        set(CCACHE_PROGRAM "${_wsl_sccache}")
+        message(STATUS "Found WSL sccache at ${CCACHE_PROGRAM} (for ExternalProjects via WSL)")
+      endif()
+    endif()
+  endif()
+  # On Windows host, a WSL path like /usr/bin/ccache is NOT executable by Windows cmake.exe
+  # (CreateProcess \usr\bin\ccache clang.exe fails). Only use a launcher that EXISTS on the
+  # host filesystem. WSL ExternalProjects (meson/autotools via wsl bash) already use WSL's
+  # ccache implicitly if installed — host ccache is optional (choco install ccache).
+  set(_host_ccache_enabled FALSE)
+  set(_wsl_ccache_skipped FALSE)
+  if(CCACHE_PROGRAM AND EXISTS "${CCACHE_PROGRAM}")
+    message(STATUS "Enabling ccache/sccache for native builds: ${CCACHE_PROGRAM}")
+    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}" CACHE STRING "" FORCE)
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}" CACHE STRING "" FORCE)
+    set(_host_ccache_enabled TRUE)
+  elseif(CCACHE_PROGRAM)
+    message(STATUS "Found ccache at ${CCACHE_PROGRAM} but not on host filesystem (WSL path on Windows) — skipping host launcher (WSL autotools/meson will still use WSL ccache if installed)")
+    set(CCACHE_PROGRAM "" CACHE STRING "" FORCE)
+    set(_wsl_ccache_skipped TRUE)
+  endif()
+  if(_host_ccache_enabled)
+    # Improve hit rate: ignore time macros, basedir, hash dir
+    if(NOT DEFINED ENV{CCACHE_SLOPPINESS})
+      set(ENV{CCACHE_SLOPPINESS} "pch_defines,time_macros")
+    endif()
+    if(NOT DEFINED ENV{CCACHE_BASEDIR})
+      set(ENV{CCACHE_BASEDIR} "${CMAKE_SOURCE_DIR}")
+    endif()
+    if(NOT DEFINED ENV{CCACHE_HASHDIR})
+      set(ENV{CCACHE_HASHDIR} "false")
+    endif()
+  elseif(NOT _wsl_ccache_skipped)
+    message(STATUS "ccache/sccache not found — native builds will not be cached (install: sudo apt install ccache / cargo install sccache, Windows: choco install ccache + wsl sudo apt install ccache)")
+  endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # WSL is the SINGLE path for Windows native builds. No MSYS2/Git Bash fallback.
 # On WIN32, WSL is REQUIRED; cmake FATAL_ERRORs if wsl.exe is missing.
 # This avoids C:/ vs /c/ vs C:\ path bugs from Meson 1.12.0, MSYS pkg-config,
