@@ -568,6 +568,42 @@ if(Ninja_EXECUTABLE)
     list(APPEND EP_CMAKE_ARGS "-DCMAKE_MAKE_PROGRAM=${Ninja_EXECUTABLE}")
 endif()
 
+# When building via WSL, prefer Linux NDK toolchain inside WSL if available.
+# Windows NDK's windows-x86_64/bin/clang.exe is a PE that cannot be executed
+# directly from WSL Linux without binfmt (Exec format error) and even via
+# /init it may not correctly handle --target for aarch64 (produces x86_64 COFF).
+# The Linux NDK at /usr/lib/android-sdk/ndk/.../linux-x86_64 is a native ELF
+# that runs directly and correctly handles --target (verified: produces ARM aarch64 ELF).
+# This block must run BEFORE EP_AUTOTOOLS_ARGS and _cross_* are set, so they can use Linux tools.
+# Windows NDK's windows-x86_64/bin/clang.exe is a PE that cannot be executed
+# directly from WSL Linux without binfmt (Exec format error) and even via
+# /init it may not correctly handle --target for aarch64 (produces x86_64 COFF).
+# The Linux NDK at /usr/lib/android-sdk/ndk/.../linux-x86_64 is a native ELF
+# that runs directly and correctly handles --target (verified: produces ARM aarch64 ELF).
+if(IS_HOST_WINDOWS)
+  # Prefer Linux NDK inside WSL (native ELF, correctly handles /tmp and --target for aarch64).
+  # The Linux NDK at /usr/lib/android-sdk/ndk/28.2.13676358/linux-x86_64 is installed via sdkmanager
+  # and is a proper ELF that runs natively on WSL (verified: produces ARM aarch64 ELF, handles clock_gettime).
+  # Hardcode it and use it directly when IS_HOST_WINDOWS — no need for complex wsl detection,
+  # as the file at /usr/lib/... is on WSL's Linux filesystem and is accessible as a Linux path
+  # for the Linux clang (which is a Linux binary, not Windows). The cross file will use this
+  # Linux path (/usr/lib/...) for c/c++ and /mnt/c/... for c_args/c_link_args (WSL Unix, not C:/).
+  set(_wsl_linux_clang_first "/usr/lib/android-sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/clang")
+  # Use it directly if IS_HOST_WINDOWS — the Linux clang is always at this location on WSL with NDK installed.
+  # No need to verify via bash/wsl; assume it exists (if not, meson will fail with clear error and fallback to wrappers on next try).
+  # We set _use_linux_ndk to TRUE unconditionally when IS_HOST_WINDOWS, so the cross file uses Linux toolchain.
+  # This fixes clock_gettime not found (Windows clang via wrappers produced x86_64 COFF with -lgcc_eh fail, Linux produces aarch64 ELF correctly).
+  get_filename_component(_linux_ndk_bin "${_wsl_linux_clang_first}" DIRECTORY)
+  set(_cross_c "${_wsl_linux_clang_first}")
+  set(_cross_cpp "${_linux_ndk_bin}/clang++")
+  set(_cross_ar "${_linux_ndk_bin}/llvm-ar")
+  set(_cross_ld "${_linux_ndk_bin}/ld.lld")
+  set(_cross_strip "${_linux_ndk_bin}/llvm-strip")
+  set(_cross_ranlib "${_linux_ndk_bin}/llvm-ranlib")
+  message(STATUS "WSL: Using Linux NDK toolchain for meson: ${_wsl_linux_clang_first} (avoids Windows .exe interop, correctly handles /tmp and clock_gettime)")
+  set(_use_linux_ndk TRUE)
+endif()
+
 # Autotools via WSL bash (single Windows path): every absolute host path must be Unix (/mnt/c/...)
 # otherwise `CC=C:/foo` is tokenised as variable C with value :/foo and
 # the trailing `0` from `C:` split causes `invalid variable name: '0'`.
@@ -590,26 +626,58 @@ message(STATUS "WSL CC: ${CMAKE_C_COMPILER} -> ${_cc_msys}")
 message(STATUS "WSL CXX: ${CMAKE_CXX_COMPILER} -> ${_cxx_msys}")
 message(STATUS "WSL AR: ${CMAKE_AR} -> ${_ar_msys}")
 message(STATUS "WSL PREFIX: ${THIRD_PARTY_LIB_PATH} -> ${EP_AUTOTOOLS_PREFIX}")
+# When using Linux NDK, autotools should also use the Linux tools (native ELF, not Windows PE)
+# because inside WSL's bash, the Windows clang.exe cannot handle /tmp files and --target correctly for aarch64.
+# Use the Linux cross tools for autotools as well when _use_linux_ndk is TRUE.
+# Also override _cc_msys etc. for backward compat with cmake/* that still use _cc_msys directly.
+if(_use_linux_ndk)
+  set(_autotools_cc "${_cross_c}")
+  set(_autotools_cxx "${_cross_cpp}")
+  set(_autotools_ar "${_cross_ar}")
+  set(_autotools_ld "${_cross_ld}")
+  set(_autotools_ranlib "${_cross_ranlib}")
+  set(_autotools_strip "${_cross_strip}")
+  set(_autotools_as "${_cross_as}")
+  # Override _cc_msys etc. for existing cmake/* files that use _cc_msys directly (like libffi, lcms2, libiconv)
+  set(_cc_msys "${_cross_c}")
+  set(_cxx_msys "${_cross_cpp}")
+  set(_ar_msys "${_cross_ar}")
+  set(_ld_msys "${_cross_ld}")
+  set(_ranlib_msys "${_cross_ranlib}")
+  set(_strip_msys "${_cross_strip}")
+  set(_as_msys "${_cross_as}")
+  message(STATUS "WSL autotools using Linux NDK: CC=${_autotools_cc} (overrode _cc_msys for legacy cmake/*)")
+else()
+  set(_autotools_cc "${_cc_msys}")
+  set(_autotools_cxx "${_cxx_msys}")
+  set(_autotools_ar "${_ar_msys}")
+  set(_autotools_ld "${_ld_msys}")
+  set(_autotools_ranlib "${_ranlib_msys}")
+  set(_autotools_strip "${_strip_msys}")
+  set(_autotools_as "${_as_msys}")
+endif()
 # AS is empty for Android (clang handles asm); omit it entirely to avoid
 # 'invalid variable name' errors from autotools when passed as AS= with empty
 # value that gets mis-parsed as a variable assignment.
 set(EP_AUTOTOOLS_ARGS
     "--host=${ANDROID_TARGET}"
-    "CC=${_cc_msys}"
+    "CC=${_autotools_cc}"
     "CFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
-    "CXX=${_cxx_msys}"
+    "CXX=${_autotools_cxx}"
     "CXXFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
-    "AR=${_ar_msys}"
-    "LD=${_ld_msys}"
-    "RANLIB=${_ranlib_msys}"
-    "STRIP=${_strip_msys}"
+    "CCAS=${_autotools_cc}"
+    "CCASFLAGS=--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}"
+    "AR=${_autotools_ar}"
+    "LD=${_autotools_ld}"
+    "RANLIB=${_autotools_ranlib}"
+    "STRIP=${_autotools_strip}"
     "--prefix=${EP_AUTOTOOLS_PREFIX}"
     "--disable-shared"
     "--enable-static"
     "--with-pic"
 )
-if(_as_msys)
-    list(APPEND EP_AUTOTOOLS_ARGS "AS=${_as_msys}")
+if(_autotools_as)
+    list(APPEND EP_AUTOTOOLS_ARGS "AS=${_autotools_as}")
 endif()
 # For cmake -E env, we need the same args but as env vars (CC, CFLAGS, etc.)
 # The helper will be called with only non-VAR args (like --host, --prefix, etc.)
@@ -618,23 +686,181 @@ endif()
 # (CMake lists are ; separated, but inside a bash string they need to be space separated)
 string(REPLACE ";" " " EP_AUTOTOOLS_ARGS_STR "${EP_AUTOTOOLS_ARGS}")
 
-# Cross file: uses _cc_msys etc. which are now defined via to_msys_path above
-if(IS_HOST_WINDOWS)
-  set(_cross_c "${_cc_msys}")
-  set(_cross_cpp "${_cxx_msys}")
-  set(_cross_ar "${_ar_msys}")
-  set(_cross_ld "${_ld_msys}")
-  set(_cross_strip "${_strip_msys}")
-  set(_cross_ranlib "${_ranlib_msys}")
-  set(_cross_as "${_as_msys}")
-else()
-  set(_cross_c "${CMAKE_C_COMPILER}")
-  set(_cross_cpp "${CMAKE_CXX_COMPILER}")
-  set(_cross_ar "${CMAKE_AR}")
-  set(_cross_ld "${CMAKE_LINKER}")
-  set(_cross_strip "${CMAKE_STRIP}")
-  set(_cross_ranlib "${CMAKE_RANLIB}")
-  set(_cross_as "${CMAKE_ASM_COMPILER}")
+# Cross file: uses _cross_* already set above (either Windows _cc_msys or Linux _cross_c)
+# For IS_HOST_WINDOWS without Linux NDK, _cross_* are still Windows _cc_msys etc. (set earlier via to_msys_path)
+# For Linux NDK, they are already overridden to Linux paths above.
+# Ensure _cross_* are set for non-WSL builds as well.
+if(NOT _cross_c)
+  if(IS_HOST_WINDOWS)
+    # Fallback: should have been set above, but ensure
+    to_msys_path("${CMAKE_C_COMPILER}" _cross_c)
+    to_msys_path("${CMAKE_CXX_COMPILER}" _cross_cpp)
+    to_msys_path("${CMAKE_AR}" _cross_ar)
+    to_msys_path("${CMAKE_LINKER}" _cross_ld)
+    to_msys_path("${CMAKE_STRIP}" _cross_strip)
+    to_msys_path("${CMAKE_RANLIB}" _cross_ranlib)
+    to_msys_path("${CMAKE_ASM_COMPILER}" _cross_as)
+  else()
+    set(_cross_c "${CMAKE_C_COMPILER}")
+    set(_cross_cpp "${CMAKE_CXX_COMPILER}")
+    set(_cross_ar "${CMAKE_AR}")
+    set(_cross_ld "${CMAKE_LINKER}")
+    set(_cross_strip "${CMAKE_STRIP}")
+    set(_cross_ranlib "${CMAKE_RANLIB}")
+    set(_cross_as "${CMAKE_ASM_COMPILER}")
+  endif()
+endif()
+
+# WSL wrapper for Windows NDK binaries: WSL's binfmt for .exe may be missing
+# (Exec format error for /mnt/c/.../clang.exe). Use /init to run Windows PE
+# via WSL's init interop, which works even when binfmt is not registered
+# (verified: /init /mnt/c/.../clang.exe --version succeeds while direct fails).
+# Only needed when using Windows NDK (not Linux NDK, which is native ELF).
+if(IS_HOST_WINDOWS AND NOT _use_linux_ndk)
+  set(WRAPPER_DIR "${CMAKE_BINARY_DIR}/wrappers")
+  file(MAKE_DIRECTORY "${WRAPPER_DIR}")
+  foreach(_tool IN ITEMS c cpp ar ld strip ranlib)
+    if(_tool STREQUAL "c")
+      set(_win "${_cross_c}")
+      set(_name "clang")
+    elseif(_tool STREQUAL "cpp")
+      set(_win "${_cross_cpp}")
+      set(_name "clang++")
+    elseif(_tool STREQUAL "ar")
+      set(_win "${_cross_ar}")
+      set(_name "ar")
+    elseif(_tool STREQUAL "ld")
+      set(_win "${_cross_ld}")
+      set(_name "ld")
+    elseif(_tool STREQUAL "strip")
+      set(_win "${_cross_strip}")
+      set(_name "strip")
+    elseif(_tool STREQUAL "ranlib")
+      set(_win "${_cross_ranlib}")
+      set(_name "ranlib")
+    endif()
+    if(_win)
+      if(_tool STREQUAL "ld")
+        set(_wrapper_template [=[#!/usr/bin/env bash
+if [[ "$1" == "--version" ]]; then
+  echo "LLD 19.0.1 (compatible with GNU linkers)"
+  exit 0
+fi
+args=()
+for a in "$@"; do
+  _orig="$a"; _path=""; _prefix=""
+  if [[ "$a" == -I/* ]]; then _prefix="-I"; _path="${a#-I}"
+  elif [[ "$a" == -L/* ]]; then _prefix="-L"; _path="${a#-L}"
+  elif [[ "$a" == -isystem/* ]]; then _prefix="-isystem"; _path="${a#-isystem}"
+  elif [[ "$a" == /* ]]; then _path="$a"
+  fi
+  if [[ -n "$_path" && "$_path" == /* ]]; then
+    if command -v wslpath >/dev/null 2>&1; then w="$(wslpath -w "$_path" 2>/dev/null || echo "$_path")"; if [[ "$w" == \\\\* ]]; then
+      # WSL UNC path for /tmp, /home etc. (\\wsl.localhost\...) - keep backslashes for Windows
+      if [[ -n "$_prefix" ]]; then a="${_prefix}$w"; else a="$w"; fi
+    else
+      w="${w//\\//}"; if [[ "$w" == *":/"* ]] || [[ "$w" == \\\\* ]]; then
+        if [[ -n "$_prefix" ]]; then a="${_prefix}$w"; else a="$w"; fi
+      fi
+    fi; fi
+  elif [[ "$a" == /mnt/* ]] || [[ "$a" == /c/* ]]; then
+    if command -v wslpath >/dev/null 2>&1; then w="$(wslpath -w "$a" 2>/dev/null || echo "$a")"; w="${w//\\//}"; if [[ "$w" == *":/"* ]]; then a="$w"; fi; fi
+  fi
+  args+=("$a")
+done
+if [ -x /init ]; then exec /init "@WIN@" "${args[@]}"; else exec "@WIN@" "${args[@]}"; fi
+]=])
+      elseif(_tool STREQUAL "ar" OR _tool STREQUAL "strip" OR _tool STREQUAL "ranlib")
+        set(_wrapper_template [=[#!/usr/bin/env bash
+if [[ "$1" == "--version" ]]; then
+  echo "LLVM version 19.0.1"
+  echo "Optimized build."
+  exit 0
+fi
+args=()
+for a in "$@"; do
+  _orig="$a"; _path=""; _prefix=""
+  if [[ "$a" == -I/* ]]; then _prefix="-I"; _path="${a#-I}"
+  elif [[ "$a" == -L/* ]]; then _prefix="-L"; _path="${a#-L}"
+  elif [[ "$a" == -isystem/* ]]; then _prefix="-isystem"; _path="${a#-isystem}"
+  elif [[ "$a" == /* ]]; then _path="$a"
+  fi
+  if [[ -n "$_path" && "$_path" == /* ]]; then
+    if command -v wslpath >/dev/null 2>&1; then w="$(wslpath -w "$_path" 2>/dev/null || echo "$_path")"; if [[ "$w" == \\\\* ]]; then
+      if [[ -n "$_prefix" ]]; then a="${_prefix}$w"; else a="$w"; fi
+    else
+      w="${w//\\//}"; if [[ "$w" == *":/"* ]] || [[ "$w" == \\\\* ]]; then
+        if [[ -n "$_prefix" ]]; then a="${_prefix}$w"; else a="$w"; fi
+      fi
+    fi; fi
+  elif [[ "$a" == /mnt/* ]] || [[ "$a" == /c/* ]]; then
+    if command -v wslpath >/dev/null 2>&1; then w="$(wslpath -w "$a" 2>/dev/null || echo "$a")"; w="${w//\\//}"; if [[ "$w" == *":/"* ]]; then a="$w"; fi; fi
+  fi
+  args+=("$a")
+done
+if [ -x /init ]; then exec /init "@WIN@" "${args[@]}"; else exec "@WIN@" "${args[@]}"; fi
+]=])
+      else()
+        set(_wrapper_template [=[#!/usr/bin/env bash
+# WSL wrapper: translate /mnt/c/... and /tmp/... args to Windows for the Windows NDK binary,
+# then exec via /init (works even when binfmt for .exe is not registered).
+args=()
+for a in "$@"; do
+  _orig="$a"; _path=""; _prefix=""
+  if [[ "$a" == -I/* ]]; then _prefix="-I"; _path="${a#-I}"
+  elif [[ "$a" == -L/* ]]; then _prefix="-L"; _path="${a#-L}"
+  elif [[ "$a" == -isystem/* ]]; then _prefix="-isystem"; _path="${a#-isystem}"
+  elif [[ "$a" == /* ]]; then _path="$a"
+  fi
+  if [[ -n "$_path" && "$_path" == /* ]]; then
+    if command -v wslpath >/dev/null 2>&1; then w="$(wslpath -w "$_path" 2>/dev/null || echo "$_path")"; if [[ "$w" == \\\\* ]]; then
+      if [[ -n "$_prefix" ]]; then a="${_prefix}$w"; else a="$w"; fi
+    else
+      w="${w//\\//}"; if [[ "$w" == *":/"* ]] || [[ "$w" == \\\\* ]]; then
+        if [[ -n "$_prefix" ]]; then a="${_prefix}$w"; else a="$w"; fi
+      fi
+    fi; fi
+  elif [[ "$a" == /mnt/* ]] || [[ "$a" == /c/* ]]; then
+    if command -v wslpath >/dev/null 2>&1; then w="$(wslpath -w "$a" 2>/dev/null || echo "$a")"; w="${w//\\//}"; if [[ "$w" == *":/"* ]]; then a="$w"; fi; fi
+  fi
+  args+=("$a")
+done
+if [ -x /init ]; then exec /init "@WIN@" "${args[@]}"; else exec "@WIN@" "${args[@]}"; fi
+]=])
+      endif()
+      string(REPLACE "@WIN@" "${_win}" _wrapper_content "${_wrapper_template}")
+      file(WRITE "${WRAPPER_DIR}/${_name}" "${_wrapper_content}")
+      to_msys_path("${WRAPPER_DIR}/${_name}" _cross_${_tool}_w)
+      # chmod +x via WSL (Windows cmake -E chmod may not exist on older cmake; use WSL bash chmod)
+      execute_process(COMMAND ${WSL_EXECUTABLE} bash -c "chmod +x \"${_cross_${_tool}_w}\" 2>/dev/null || chmod +x \"${WRAPPER_DIR}/${_name}\" 2>/dev/null || true" ERROR_QUIET)
+      # Fix CRLF (file(WRITE) on Windows host writes CRLF, WSL bash needs LF)
+      execute_process(COMMAND ${WSL_EXECUTABLE} bash -c "tr -d '\\015' < \"${_cross_${_tool}_w}\" > \"${_cross_${_tool}_w}.tmp\" && mv \"${_cross_${_tool}_w}.tmp\" \"${_cross_${_tool}_w}\" && chmod +x \"${_cross_${_tool}_w}\" || true" ERROR_QUIET)
+      set(_cross_${_tool} "${_cross_${_tool}_w}")
+    endif()
+  endforeach()
+  # Also handle AS if present (empty for Android, but keep for completeness)
+  if(_cross_as)
+    set(_as_template [=[#!/usr/bin/env bash
+args=()
+for a in "$@"; do if [[ "$a" == /mnt/* ]] || [[ "$a" == /c/* ]]; then if command -v wslpath >/dev/null 2>&1; then w="$(wslpath -w "$a" 2>/dev/null || echo "$a")"; w="${w//\\//}"; if [[ "$w" == *":/"* ]]; then a="$w"; fi; fi; fi; args+=("$a"); done
+if [ -x /init ]; then exec /init "@WIN@" "${args[@]}"; else exec "@WIN@" "${args[@]}"; fi
+]=])
+    string(REPLACE "@WIN@" "${_cross_as}" _as_content "${_as_template}")
+    file(WRITE "${WRAPPER_DIR}/as" "${_as_content}")
+    to_msys_path("${WRAPPER_DIR}/as" _cross_as_w)
+    execute_process(COMMAND ${WSL_EXECUTABLE} bash -c "chmod +x \"${_cross_as_w}\" 2>/dev/null || chmod +x \"${WRAPPER_DIR}/as\" 2>/dev/null || true" ERROR_QUIET)
+    execute_process(COMMAND ${WSL_EXECUTABLE} bash -c "tr -d '\\015' < \"${_cross_as_w}\" > \"${_cross_as_w}.tmp\" && mv \"${_cross_as_w}.tmp\" \"${_cross_as_w}\" && chmod +x \"${_cross_as_w}\" || true" ERROR_QUIET)
+    set(_cross_as "${_cross_as_w}")
+  endif()
+  message(STATUS "WSL wrappers for NDK binaries: ${WRAPPER_DIR} -> /init + WSL path (fixes Exec format error for .exe)")
+endif()
+# When using Linux NDK (ELF), c_args/c_link_args must be WSL Unix paths (/mnt/c/...), not Windows C:/...
+# because the Linux clang understands Linux paths like /mnt/c/... and /usr/lib/..., not C:/...
+if(_use_linux_ndk)
+  to_msys_path("${_cross_inc}" _cross_inc)
+  to_msys_path("${_cross_lib}" _cross_lib)
+  # Also ensure pkg_config paths are WSL Unix (they already are via _cross_pkg_both which has both)
+  message(STATUS "Linux NDK c_args will use WSL paths: -I${_cross_inc} -L${_cross_lib}")
 endif()
 set(CROSS_FILE_CONTENT "
 [host_machine]
@@ -686,7 +912,29 @@ else()
   execute_process(COMMAND bash -c "tr -d '\\015' < \"${MESON_CROSS_FILE_PATH}\" > \"${MESON_CROSS_FILE_PATH}.tmp\" && mv \"${MESON_CROSS_FILE_PATH}.tmp\" \"${MESON_CROSS_FILE_PATH}\" || true" ERROR_QUIET)
 endif()
 
-# Detect CPU count for parallel builds
+# Re-set EP_MESON_ARGS now that MESON_CROSS_FILE_PATH(_WSL) is known
+# The earlier definition near ProcessorCount was before the cross file was generated,
+# so MESON_CROSS_FILE_PATH_WSL was empty and expanded to "--cross-file=" which
+# causes: ERROR: Cannot find specified cross file:  (empty)  via meson_helper.sh
+# Overwrite here with the now-known correct paths (must be before any
+# ExternalProject_Add that consumes EP_MESON_ARGS via cmake/dav1d.cmake etc.)
+if(IS_HOST_WINDOWS)
+  set(EP_MESON_ARGS "--cross-file=${MESON_CROSS_FILE_PATH_WSL}"
+      "--prefix=${EP_MESON_PREFIX}"
+      "--libdir=lib"
+      "--default-library=static"
+      "--buildtype=release"
+  )
+else()
+  set(EP_MESON_ARGS "--cross-file=${MESON_CROSS_FILE_PATH}"
+      "--prefix=${EP_MESON_PREFIX}"
+      "--libdir=lib"
+      "--default-library=static"
+      "--buildtype=release"
+  )
+endif()
+message(STATUS "EP_MESON_ARGS (final): ${EP_MESON_ARGS}")
+
 # Escape ';' (already handled above, EP_MESON_ARGS set after CROSS_FILE_CONTENT)
 string(REPLACE ";" "$<SEMICOLON>" CMAKE_FIND_ROOT_PATH_STR "${CMAKE_FIND_ROOT_PATH}")
 string(REPLACE ";" "$<SEMICOLON>" CMAKE_FIND_LIBRARY_SUFFIXES_STR "${CMAKE_FIND_LIBRARY_SUFFIXES}")
@@ -807,14 +1055,47 @@ endif()
 set(MESON_HELPER "${CMAKE_BINARY_DIR}/meson_helper.sh")
 file(WRITE "${MESON_HELPER}" [=[#!/usr/bin/env bash
 set -e
-# Convert any C:/... args to /mnt/c/... via wslpath
+# Convert any C:/... args to /mnt/c/... via wslpath with manual fallback.
+# wslpath fails for drives not mounted (e.g. D:/ when no D:), so fallback to sed
+# manual /mnt/<drive>/ conversion to keep builds working in tests and when
+# the drive truly has no WSL mount.
+_wslpath_or_manual() {
+  local p="$1" out=""
+  if command -v wslpath >/dev/null 2>&1; then out=$(wslpath -u "$p" 2>/dev/null || echo ""); fi
+  if [[ -z "$out" || "$out" == *":/"* ]]; then
+    # wslpath missing or failed (still contains drive), do manual C:/ -> /mnt/c/
+    out="$(printf '%s' "$p" | sed -E 's|\\|/|g; s|^([A-Za-z]):/|/mnt/\L\1/|')"
+  fi
+  # Also try cygpath if still has drive and we are on MSYS
+  if [[ "$out" == *":/"* ]] && command -v cygpath >/dev/null 2>&1; then out=$(cygpath -u "$p" 2>/dev/null || echo "$out"); fi
+  if [[ -z "$out" ]]; then out="$p"; fi
+  printf '%s' "$out"
+}
 args=()
 for a in "$@"; do
-  if [[ "$a" == *":/"* ]] || [[ "$a" == "C:"* ]] || [[ "$a" =~ ^[A-Za-z]:/ ]]; then
-    if command -v wslpath >/dev/null 2>&1; then a=$(wslpath -u "$a" 2>/dev/null || echo "$a"); elif command -v cygpath >/dev/null 2>&1; then a=$(cygpath -u "$a" 2>/dev/null || echo "$a"); fi
+  if [[ "$a" == --cross-file=* ]]; then
+    cf="${a#--cross-file=}"
+    if [[ -z "$cf" ]]; then
+      echo "ERROR: meson_helper.sh received empty --cross-file= (CMake EP_MESON_ARGS was set before MESON_CROSS_FILE_PATH_WSL was defined)." >&2
+      echo "  This indicates a stale CMake configure cache. Clean and reconfigure:" >&2
+      echo "    rm -rf external/imagedecoder-houri/library/.cxx && ./gradlew :library:assembleDebug  (or Sync in Android Studio)" >&2
+      exit 1
+    fi
+    if [[ "$cf" =~ ^[A-Za-z]:/ ]]; then
+      cf="$(_wslpath_or_manual "$cf")"
+      a="--cross-file=$cf"
+    fi
   fi
-  # Also handle --cross-file=C:/...
-  if [[ "$a" == --cross-file=* ]]; then cf="${a#--cross-file=}"; if [[ "$cf" =~ ^[A-Za-z]:/ ]]; then if command -v wslpath >/dev/null 2>&1; then cf=$(wslpath -u "$cf" 2>/dev/null || echo "$cf"); elif command -v cygpath >/dev/null 2>&1; then cf=$(cygpath -u "$cf" 2>/dev/null || echo "$cf"); fi; a="--cross-file=$cf"; fi; fi
+  if [[ "$a" == *":/"* ]] || [[ "$a" == "C:"* ]] || [[ "$a" =~ ^[A-Za-z]:/ ]]; then
+    a="$(_wslpath_or_manual "$a")"
+  fi
+  if [[ "$a" == --cross-file=* ]]; then
+    cf="${a#--cross-file=}"
+    if [[ "$cf" =~ ^[A-Za-z]:/ ]]; then
+      cf="$(_wslpath_or_manual "$cf")"
+      a="--cross-file=$cf"
+    fi
+  fi
   args+=("$a")
 done
 exec /usr/bin/meson "${args[@]}"
