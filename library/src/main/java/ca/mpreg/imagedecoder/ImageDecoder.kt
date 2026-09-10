@@ -1,8 +1,8 @@
 package ca.mpreg.imagedecoder
 
+import android.os.Build
 import java.io.Closeable
 import java.io.InputStream
-import java.lang.ref.Cleaner
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicLong
 
@@ -88,15 +88,23 @@ class ImageDecoder private constructor(
     external fun encode(suffix: String, page: Int = -1): EncodeResult
 
     private val closePtr = AtomicLong(ptr)
-    private val cleanable: Cleaner.Cleanable?
+    private val cleanable: Any?
 
     init {
         val p = ptr
-        cleanable = cleaner.register(this) {
-            val v = closePtr.getAndSet(0L)
-            if (v != 0L) {
-                try { nativeFree(v) } catch (_: Exception) {}
-            }
+        cleanable = try {
+            val c = cleaner
+            if (c != null) {
+                val register = c.javaClass.getMethod("register", Any::class.java, Runnable::class.java)
+                register.invoke(c, this, Runnable {
+                    val v = closePtr.getAndSet(0L)
+                    if (v != 0L) {
+                        try { nativeFree(v) } catch (_: Exception) {}
+                    }
+                })
+            } else null
+        } catch (_: Throwable) {
+            null
         }
     }
 
@@ -105,12 +113,16 @@ class ImageDecoder private constructor(
         val v = closePtr.getAndSet(0L)
         if (v != 0L) {
             try { free() } catch (_: Exception) {}
-            try { cleanable?.clean() } catch (_: Exception) {}
+            try {
+                cleanable?.let { cl ->
+                    try { cl.javaClass.getMethod("clean").invoke(cl) } catch (_: Throwable) {}
+                }
+            } catch (_: Exception) {}
         }
     }
 
     protected fun finalize() {
-        close()
+        try { close() } catch (_: Throwable) {}
     }
 
     private external fun free()
@@ -125,13 +137,32 @@ class ImageDecoder private constructor(
     )
 
     companion object {
-        private val cleaner: Cleaner = Cleaner.create()
+        private val cleaner: Any? = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                Class.forName("java.lang.ref.Cleaner").getMethod("create").invoke(null)
+            } else null
+        } catch (_: Throwable) {
+            null
+        }
 
         @JvmStatic
         private external fun nativeFree(ptr: Long)
 
+        @Volatile private var loadError: Throwable? = null
+        @Volatile private var isLoaded = false
+
         init {
-            System.loadLibrary("imagedecoder2")
+            try {
+                System.loadLibrary("imagedecoder2")
+                isLoaded = true
+            } catch (e: Throwable) {
+                loadError = e
+                isLoaded = false
+            }
+        }
+
+        private fun ensureLoaded() {
+            if (!isLoaded) throw DecodeException("imagedecoder native library not loaded: ${loadError?.message}", loadError)
         }
 
         @JvmStatic
