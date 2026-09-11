@@ -2,8 +2,10 @@ include(ExternalProject)
 
 if(IS_HOST_WINDOWS)
   set(_vips_meson_cmd ${BASH_CMD} "${MESON_HELPER_MSYS}")
+elseif(MESON_VIA_WSL)
+  set(_vips_meson_cmd ${Meson_EXECUTABLE} ${MESON_WSL_CMD})
 else()
-  set(_vips_meson_cmd ${Meson_EXECUTABLE} $<$<BOOL:${MESON_VIA_WSL}>:${MESON_WSL_CMD}>)
+  set(_vips_meson_cmd ${Meson_EXECUTABLE})
 endif()
 ExternalProject_Add(ep_libvips
     GIT_REPOSITORY https://github.com/libvips/libvips

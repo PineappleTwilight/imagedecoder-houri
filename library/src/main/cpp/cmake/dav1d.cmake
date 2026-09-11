@@ -10,8 +10,10 @@ include(ExternalProject)
 # On IS_HOST_WINDOWS, use meson_helper.sh via wsl bash to convert C:/ paths to /mnt/c/ via wslpath
 if(IS_HOST_WINDOWS)
   set(_dav1d_meson_cmd ${BASH_CMD} "${MESON_HELPER_MSYS}")
+elseif(MESON_VIA_WSL)
+  set(_dav1d_meson_cmd ${Meson_EXECUTABLE} ${MESON_WSL_CMD})
 else()
-  set(_dav1d_meson_cmd ${Meson_EXECUTABLE} $<$<BOOL:${MESON_VIA_WSL}>:${MESON_WSL_CMD}>)
+  set(_dav1d_meson_cmd ${Meson_EXECUTABLE})
 endif()
 ExternalProject_Add(ep_dav1d
     GIT_REPOSITORY https://code.videolan.org/videolan/dav1d
