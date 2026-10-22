@@ -1,5 +1,7 @@
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <mutex>
 #include <string>
 
 #include <glib.h>
@@ -48,9 +50,95 @@ jint JNI_OnLoad(JavaVM* vm, void*) {
   return JNI_VERSION_1_6;
 }
 
-static jlong get_ptr(JNIEnv* env, jobject obj) {
+// KMK --> Cached JNI metadata.
+//
+// Before this, every decode re-ran GetObjectClass + GetFieldID for the receiver's `ptr`, and
+// FindClass + GetMethodID for ByteBuffer::allocateDirect and the DecodeResult constructor - all
+// per frame, all on the decode worker's only thread. The lookups below happen once and hand back
+// global refs, so a later call short-circuits on the null test and pays nothing.
+//
+// Every accessor keeps the pre-cache lookup as a fallback, because a static that failed to fill
+// once must not make a call site fail differently than it used to. A cached field is only taken
+// when the receiver really is an instance of the cached class (IsInstanceOf), so a receiver from
+// another classloader still gets its own per-call resolution, exactly as before.
+//
+// Synchronization: init runs under a single std::call_once; per-call code then only reads the
+// statics. A null member means "not cached", and the call sites treat it as the fallback path.
+static jclass g_imageDecoderCls = nullptr;      // global ref
+static jmethodID g_imageDecoderCtor = nullptr;  // (JIIZLjava/lang/String;)V
+static jfieldID g_imageDecoderPtrField = nullptr;
+static jclass g_encodeResultCls = nullptr;      // global ref
+static jmethodID g_encodeResultCtor = nullptr;  // (JLjava/nio/ByteBuffer;)V
+static jfieldID g_encodeResultPtrField = nullptr;
+static jclass g_decodeResultCls = nullptr;      // global ref
+static jmethodID g_decodeResultCtor = nullptr;  // (Ljava/nio/ByteBuffer;IIIIIII)V
+static jclass g_byteBufferCls = nullptr;        // global ref
+static jmethodID g_allocateDirect = nullptr;    // (I)Ljava/nio/ByteBuffer;
+static jclass g_imageInfoCls = nullptr;         // global ref
+static jmethodID g_imageInfoCtor = nullptr;     // (IIILjava/lang/String;ZI)V
+
+static jclass cache_global_class(JNIEnv* env, const char* name) {
+  jclass local = findClassChecked(env, name);
+  if (local == nullptr) return nullptr;
+  jclass global = static_cast<jclass>(env->NewGlobalRef(local));
+  env->DeleteLocalRef(local);
+  return global;
+}
+
+static void init_cached_bindings(JNIEnv* env) {
+  g_imageDecoderCls = cache_global_class(env, "ca/mpreg/imagedecoder/ImageDecoder");
+  if (g_imageDecoderCls != nullptr && !env->ExceptionCheck()) {
+    g_imageDecoderCtor =
+        env->GetMethodID(g_imageDecoderCls, "<init>", "(JIIZLjava/lang/String;)V");
+    g_imageDecoderPtrField = env->GetFieldID(g_imageDecoderCls, "ptr", "J");
+  }
+  g_encodeResultCls = cache_global_class(env, "ca/mpreg/imagedecoder/ImageDecoder$EncodeResult");
+  if (g_encodeResultCls != nullptr && !env->ExceptionCheck()) {
+    g_encodeResultCtor =
+        env->GetMethodID(g_encodeResultCls, "<init>", "(JLjava/nio/ByteBuffer;)V");
+    g_encodeResultPtrField = env->GetFieldID(g_encodeResultCls, "ptr", "J");
+  }
+  g_decodeResultCls = cache_global_class(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeResult");
+  if (g_decodeResultCls != nullptr && !env->ExceptionCheck()) {
+    g_decodeResultCtor =
+        env->GetMethodID(g_decodeResultCls, "<init>", "(Ljava/nio/ByteBuffer;IIIIIII)V");
+  }
+  g_byteBufferCls = cache_global_class(env, "java/nio/ByteBuffer");
+  if (g_byteBufferCls != nullptr && !env->ExceptionCheck()) {
+    g_allocateDirect =
+        env->GetStaticMethodID(g_byteBufferCls, "allocateDirect", "(I)Ljava/nio/ByteBuffer;");
+  }
+  g_imageInfoCls = cache_global_class(env, "ca/mpreg/imagedecoder/ImageDecoder$ImageInfo");
+  if (g_imageInfoCls != nullptr && !env->ExceptionCheck()) {
+    g_imageInfoCtor = env->GetMethodID(g_imageInfoCls, "<init>", "(IIILjava/lang/String;ZI)V");
+  }
+  // A failed GetMethodID/GetFieldID above leaves a pending JVM exception. Call sites fall back
+  // to their own per-call resolution and throw a descriptive error there, so the pending one is
+  // dropped here rather than surfacing from the next unrelated JNI call.
+  if (env->ExceptionCheck()) env->ExceptionClear();
+}
+
+/** Idempotent; the null-flag fast path afterwards is one atomic load. */
+static void ensure_cached_bindings(JNIEnv* env) {
+  static std::once_flag once;
+  std::call_once(once, [env] { init_cached_bindings(env); });
+}
+
+// KMK <--
+
+// KMK --> ptr lookups: the cached field when the receiver matches the cached class, the original
+// per-call object-class lookup otherwise. The old body is kept verbatim as the fallback, so a
+// binding-cache miss behaves exactly as it did before.
+static jlong get_ptr_cached(JNIEnv* env, jobject obj) {
   if (env == nullptr || obj == nullptr) return 0;
   if (env->ExceptionCheck()) env->ExceptionClear();
+  ensure_cached_bindings(env);
+  if (g_imageDecoderPtrField != nullptr && g_imageDecoderCls != nullptr &&
+      env->IsInstanceOf(obj, g_imageDecoderCls)) {
+    jlong v = env->GetLongField(obj, g_imageDecoderPtrField);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return 0; }
+    return v;
+  }
   jclass cls = env->GetObjectClass(obj);
   if (cls == nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); return 0; }
   jfieldID fid = env->GetFieldID(cls, "ptr", "J");
@@ -61,9 +149,28 @@ static jlong get_ptr(JNIEnv* env, jobject obj) {
   return v;
 }
 
-static jlong take_ptr(JNIEnv* env, jobject obj) {
+static jlong take_ptr_cached(JNIEnv* env, jobject obj) {
   if (env == nullptr || obj == nullptr) return 0;
   if (env->ExceptionCheck()) env->ExceptionClear();
+  ensure_cached_bindings(env);
+  if (g_imageDecoderPtrField != nullptr && g_imageDecoderCls != nullptr &&
+      env->IsInstanceOf(obj, g_imageDecoderCls)) {
+    jlong ptr = env->GetLongField(obj, g_imageDecoderPtrField);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return 0; }
+    env->SetLongField(obj, g_imageDecoderPtrField, 0L);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    return ptr;
+  }
+  // KMK --> EncodeResult receivers (its free() export) get their own cached branch.
+  if (g_encodeResultPtrField != nullptr && g_encodeResultCls != nullptr &&
+      env->IsInstanceOf(obj, g_encodeResultCls)) {
+    jlong ptr = env->GetLongField(obj, g_encodeResultPtrField);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return 0; }
+    env->SetLongField(obj, g_encodeResultPtrField, 0L);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    return ptr;
+  }
+  // KMK <--
   jclass cls = env->GetObjectClass(obj);
   if (cls == nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); return 0; }
   jfieldID fid = env->GetFieldID(cls, "ptr", "J");
@@ -74,6 +181,8 @@ static jlong take_ptr(JNIEnv* env, jobject obj) {
   env->DeleteLocalRef(cls);
   return ptr;
 }
+
+// KMK <--
 
 struct Decoder {
   uint8_t* buffer = nullptr;
@@ -97,6 +206,11 @@ static void decoder_free(Decoder* d) {
 
 static constexpr size_t kMaxImageBytes = 80 * 1024 * 1024;
 static constexpr int kMaxDimension = 16384;
+// KMK --> Stream-read chunk handed to the JVM. The old 8 KiB made one JVM crossing per 8 KB -
+// for a 25 MB page that is 3000+ `read` calls before decoding begins. 64 KiB shrinks that by 8x
+// with no other change.
+static constexpr int kReadChunkBytes = 64 * 1024;
+// KMK <--
 
 static uint8_t* read_all(JNIEnv* env, jobject jstream, size_t* out_size) {
   if (out_size) *out_size = 0;
@@ -108,7 +222,7 @@ static uint8_t* read_all(JNIEnv* env, jobject jstream, size_t* out_size) {
   jmethodID readMethod = env->GetMethodID(cls, "read", "([B)I");
   if (readMethod == nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); env->DeleteLocalRef(cls); return nullptr; }
 
-  jbyteArray buf = env->NewByteArray(8192);
+  jbyteArray buf = env->NewByteArray(kReadChunkBytes);
   if (buf == nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); env->DeleteLocalRef(cls); return nullptr; }
 
   GByteArray* result = g_byte_array_new();
@@ -118,7 +232,7 @@ static uint8_t* read_all(JNIEnv* env, jobject jstream, size_t* out_size) {
     jint n = env->CallIntMethod(jstream, readMethod, buf);
     if (env->ExceptionCheck()) { env->ExceptionClear(); break; }
     if (n <= 0) break;
-    if (n > 8192) n = 8192;
+    if (n > kReadChunkBytes) n = kReadChunkBytes;
     size_t add = static_cast<size_t>(n);
     if (result->len > kMaxImageBytes || add > kMaxImageBytes - result->len) {
       g_byte_array_free(result, TRUE);
@@ -143,28 +257,11 @@ static uint8_t* read_all(JNIEnv* env, jobject jstream, size_t* out_size) {
   return data;
 }
 
-extern "C" JNIEXPORT jobject JNICALL Java_ca_mpreg_imagedecoder_ImageDecoder_new(JNIEnv* env, jclass, jobject jstream) {
-  if (env == nullptr || jstream == nullptr) {
-    throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Null image stream");
-    return nullptr;
-  }
-  Decoder* decoder = decoder_new();
-  if (decoder == nullptr) {
-    throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Out of memory");
-    return nullptr;
-  }
-  decoder->buffer = read_all(env, jstream, &decoder->buffer_size);
-  if (env->ExceptionCheck()) {
-    decoder_free(decoder);
-    return nullptr;
-  }
-  if (decoder->buffer_size == 0 || decoder->buffer == nullptr) {
-    decoder_free(decoder);
-    if (env->ExceptionCheck()) env->ExceptionClear();
-    throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Empty or unreadable image stream");
-    return nullptr;
-  }
-
+// KMK --> Shared construction for both ingest paths (stream and byte array). Anything from
+// "wrap the buffer in a VImage and read the metadata" to "build the Java object" lives here once;
+// Java_ca_mpreg_imagedecoder_ImageDecoder_new and ..._newBytes only differ in how the Decoder's
+// buffer is filled. Identical body to the try block that used to live inline in `new()`.
+static jobject construct_decoder_object(JNIEnv* env, Decoder* decoder) {
   try {
     vips::VImage image = vips::VImage::new_from_buffer(decoder->buffer, decoder->buffer_size, "");
     decoder->pages = image.get_typeof(VIPS_META_N_PAGES) != 0 ? image.get_int(VIPS_META_N_PAGES) : 1;
@@ -192,13 +289,25 @@ extern "C" JNIEXPORT jobject JNICALL Java_ca_mpreg_imagedecoder_ImageDecoder_new
       loader_str = loader_cstr ? loader_cstr : "";
     } catch (...) { loader_str = ""; }
     image = vips::VImage();
+
+    // Constructor lookup goes through the cached binding when it resolved once.
     jstring jloader = env->NewStringUTF(loader_str.c_str());
     if (jloader == nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); decoder_free(decoder); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Failed to allocate loader string"); return nullptr; }
+    ensure_cached_bindings(env);
+    jobject obj = nullptr;
+    if (g_imageDecoderCtor != nullptr && g_imageDecoderCls != nullptr && !env->ExceptionCheck()) {
+      obj = env->NewObject(g_imageDecoderCls, g_imageDecoderCtor, reinterpret_cast<jlong>(decoder),
+                           (jint)decoder->pages, (jint)0, (jboolean)is_hdr, jloader);
+      env->DeleteLocalRef(jloader);
+      if (obj == nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); decoder_free(decoder); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Failed to create ImageDecoder"); return nullptr; }
+      return obj;
+    }
+    // Fallback: the original per-call class + constructor lookup.
     jclass cls = findClassChecked(env, "ca/mpreg/imagedecoder/ImageDecoder");
     if (cls == nullptr) { decoder_free(decoder); env->DeleteLocalRef(jloader); if (!env->ExceptionCheck()) throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "ImageDecoder class not found"); return nullptr; }
     jmethodID ctor = env->GetMethodID(cls, "<init>", "(JIIZLjava/lang/String;)V");
     if (ctor == nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); env->DeleteLocalRef(jloader); env->DeleteLocalRef(cls); decoder_free(decoder); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "ImageDecoder constructor not found"); return nullptr; }
-    jobject obj = env->NewObject(cls, ctor, reinterpret_cast<jlong>(decoder), (jint)decoder->pages, (jint)0, (jboolean)is_hdr, jloader);
+    obj = env->NewObject(cls, ctor, reinterpret_cast<jlong>(decoder), (jint)decoder->pages, (jint)0, (jboolean)is_hdr, jloader);
     env->DeleteLocalRef(jloader);
     env->DeleteLocalRef(cls);
     if (obj == nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); decoder_free(decoder); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Failed to create ImageDecoder"); return nullptr; }
@@ -213,10 +322,79 @@ extern "C" JNIEXPORT jobject JNICALL Java_ca_mpreg_imagedecoder_ImageDecoder_new
     return nullptr;
   }
 }
+// KMK <--
+
+extern "C" JNIEXPORT jobject JNICALL Java_ca_mpreg_imagedecoder_ImageDecoder_new(JNIEnv* env, jclass, jobject jstream) {
+  if (env == nullptr || jstream == nullptr) {
+    throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Null image stream");
+    return nullptr;
+  }
+  Decoder* decoder = decoder_new();
+  if (decoder == nullptr) {
+    throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Out of memory");
+    return nullptr;
+  }
+  decoder->buffer = read_all(env, jstream, &decoder->buffer_size);
+  if (env->ExceptionCheck()) {
+    decoder_free(decoder);
+    return nullptr;
+  }
+  if (decoder->buffer_size == 0 || decoder->buffer == nullptr) {
+    decoder_free(decoder);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Empty or unreadable image stream");
+    return nullptr;
+  }
+  return construct_decoder_object(env, decoder);
+}
+
+// KMK --> Byte-array ingest: the same construction pipeline as the stream path, but the JVM→native
+// copy of the image bytes happens exactly once, against the array the caller already holds,
+// instead of being re-read chunk by chunk from a fresh stream wrapper.
+extern "C" JNIEXPORT jobject JNICALL Java_ca_mpreg_imagedecoder_ImageDecoder_newBytes(JNIEnv* env, jclass, jbyteArray jbytes) {
+  if (env == nullptr || jbytes == nullptr) {
+    throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Null image bytes");
+    return nullptr;
+  }
+  const jsize len = env->GetArrayLength(jbytes);
+  if (len <= 0) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Empty or unreadable image bytes");
+    return nullptr;
+  }
+  if (static_cast<size_t>(len) > kMaxImageBytes) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Image too large (>80MB)");
+    return nullptr;
+  }
+  Decoder* decoder = decoder_new();
+  if (decoder == nullptr) {
+    throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Out of memory");
+    return nullptr;
+  }
+  decoder->buffer = static_cast<uint8_t*>(g_try_malloc(static_cast<size_t>(len)));
+  if (decoder->buffer == nullptr) {
+    decoder_free(decoder);
+    throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Out of memory");
+    return nullptr;
+  }
+  decoder->buffer_size = static_cast<size_t>(len);
+  jbyte* elems = env->GetByteArrayElements(jbytes, nullptr);
+  if (elems == nullptr || env->ExceptionCheck()) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    decoder_free(decoder);
+    throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Failed to read image bytes");
+    return nullptr;
+  }
+  memcpy(decoder->buffer, elems, static_cast<size_t>(len));
+  env->ReleaseByteArrayElements(jbytes, elems, JNI_ABORT);
+  return construct_decoder_object(env, decoder);
+}
+// KMK <--
 
 extern "C" JNIEXPORT void JNICALL Java_ca_mpreg_imagedecoder_ImageDecoder_free(JNIEnv* env, jobject obj) {
   if (env == nullptr || obj == nullptr) return;
-  jlong ptr = take_ptr(env, obj);
+  jlong ptr = take_ptr_cached(env, obj);
   if (ptr == 0) return;
   Decoder* decoder = reinterpret_cast<Decoder*>(ptr);
   decoder_free(decoder);
@@ -254,12 +432,22 @@ extern "C" JNIEXPORT jobject JNICALL Java_ca_mpreg_imagedecoder_ImageDecoder_get
     g_free(buffer);
     jstring jfmt = env->NewStringUTF(norm.c_str());
     if (jfmt==nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Failed to allocate format string"); return nullptr; }
-    jclass cls = findClassChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$ImageInfo");
-    if (cls==nullptr) { env->DeleteLocalRef(jfmt); if (!env->ExceptionCheck()) throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "ImageInfo class not found"); return nullptr; }
-    jmethodID ctor = env->GetMethodID(cls, "<init>", "(IIILjava/lang/String;ZI)V");
-    if (ctor==nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); env->DeleteLocalRef(jfmt); env->DeleteLocalRef(cls); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "ImageInfo constructor not found"); return nullptr; }
-    jobject out = env->NewObject(cls, ctor, (jint)w, (jint)h, (jint)pages, jfmt, (jboolean)isHdr, (jint)duration);
-    env->DeleteLocalRef(jfmt); env->DeleteLocalRef(cls);
+    // KMK --> Cached constructor, original lookup as fallback.
+    ensure_cached_bindings(env);
+    bool infoIsLocal = false;
+    jclass infoCls = g_imageInfoCls;
+    jmethodID ctor = g_imageInfoCtor;
+    if (infoCls == nullptr || ctor == nullptr) {
+      infoIsLocal = true;
+      infoCls = findClassChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$ImageInfo");
+      if (infoCls==nullptr) { env->DeleteLocalRef(jfmt); if (!env->ExceptionCheck()) throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "ImageInfo class not found"); return nullptr; }
+      ctor = env->GetMethodID(infoCls, "<init>", "(IIILjava/lang/String;ZI)V");
+      if (ctor==nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); env->DeleteLocalRef(jfmt); env->DeleteLocalRef(infoCls); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "ImageInfo constructor not found"); return nullptr; }
+    }
+    jobject out = env->NewObject(infoCls, ctor, (jint)w, (jint)h, (jint)pages, jfmt, (jboolean)isHdr, (jint)duration);
+    if (infoIsLocal) env->DeleteLocalRef(infoCls);
+    // KMK <--
+    env->DeleteLocalRef(jfmt);
     if (out==nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Failed to create ImageInfo"); return nullptr; }
     return out;
   } catch (const vips::VError& e) { g_free(buffer); throw_vips_error(env, e); return nullptr; } catch (...) { g_free(buffer); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Unknown getInfo error"); return nullptr; }
@@ -267,7 +455,7 @@ extern "C" JNIEXPORT jobject JNICALL Java_ca_mpreg_imagedecoder_ImageDecoder_get
 
 extern "C" JNIEXPORT jobject JNICALL Java_ca_mpreg_imagedecoder_ImageDecoder_decode(JNIEnv* env, jobject obj, jint page, jboolean crop, jboolean getTrim) {
   if (env==nullptr || obj==nullptr) { throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Null decoder"); return nullptr; }
-  jlong ptr = get_ptr(env, obj);
+  jlong ptr = get_ptr_cached(env, obj);
   Decoder* decoder = reinterpret_cast<Decoder*>(ptr);
   if (decoder==nullptr || decoder->buffer==nullptr) { throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Decoder already closed"); return nullptr; }
   if (page < 0 || page >= decoder->pages) { throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Page index out of range"); return nullptr; }
@@ -296,24 +484,42 @@ extern "C" JNIEXPORT jobject JNICALL Java_ca_mpreg_imagedecoder_ImageDecoder_dec
     size_t size = 0; try { size = VIPS_IMAGE_SIZEOF_IMAGE(frame.get_image()); } catch (...) { throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Failed to compute image size"); return nullptr; }
     if (size==0 || size > static_cast<size_t>(kMaxDimension)*kMaxDimension*4) { throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Image size out of range"); return nullptr; }
     if (size > static_cast<size_t>(G_MAXINT)) { throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Image too large for ByteBuffer"); return nullptr; }
-    jclass bufferCls = findClassChecked(env, "java/nio/ByteBuffer");
-    if (bufferCls==nullptr) { throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "ByteBuffer class not found"); return nullptr; }
-    jmethodID allocateDirect = env->GetStaticMethodID(bufferCls, "allocateDirect", "(I)Ljava/nio/ByteBuffer;");
-    if (allocateDirect==nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); env->DeleteLocalRef(bufferCls); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "allocateDirect not found"); return nullptr; }
+    // KMK --> Cached class/constructor lookups; the pre-cache resolution is the fallback and the
+    // local-ref bookkeeping only applies to what the fallback produced (cached entries are global
+    // refs and are never released here).
+    ensure_cached_bindings(env);
+    bool bufferIsLocal = false;
+    jclass bufferCls = g_byteBufferCls;
+    jmethodID allocateDirect = g_allocateDirect;
+    if (bufferCls == nullptr || allocateDirect == nullptr) {
+      bufferIsLocal = true;
+      bufferCls = findClassChecked(env, "java/nio/ByteBuffer");
+      if (bufferCls==nullptr) { throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "ByteBuffer class not found"); return nullptr; }
+      allocateDirect = env->GetStaticMethodID(bufferCls, "allocateDirect", "(I)Ljava/nio/ByteBuffer;");
+      if (allocateDirect==nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); env->DeleteLocalRef(bufferCls); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "allocateDirect not found"); return nullptr; }
+    }
     jobject byteBuffer = env->CallStaticObjectMethod(bufferCls, allocateDirect, (jint)size);
-    env->DeleteLocalRef(bufferCls);
+    if (bufferIsLocal) env->DeleteLocalRef(bufferCls);
     if (byteBuffer==nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Out of memory"); return nullptr; }
     void* data = env->GetDirectBufferAddress(byteBuffer);
-    if (data==nullptr) { if (env->ExceptionCheck()) env->ExceptionClear(); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Failed to allocate direct byte buffer"); return nullptr; }
+    if (data==nullptr) { env->DeleteLocalRef(byteBuffer); if (env->ExceptionCheck()) env->ExceptionClear(); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Failed to allocate direct byte buffer"); return nullptr; }
     jlong cap = env->GetDirectBufferCapacity(byteBuffer);
-    if (cap < (jlong)size) { throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "ByteBuffer capacity mismatch"); return nullptr; }
-    try { frame.write(vips::VImage::new_from_memory(data, size, width, height, frame.bands(), frame.format())); } catch (const vips::VError& e) { throw_vips_error(env, e); return nullptr; } catch (...) { throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Failed to write image bytes"); return nullptr; }
-    jclass cls = findClassChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeResult");
-    if (cls==nullptr) { throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "DecodeResult class not found"); return nullptr; }
-    jmethodID ctor = env->GetMethodID(cls, "<init>", "(Ljava/nio/ByteBuffer;IIIIIII)V");
-    if (ctor==nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); env->DeleteLocalRef(cls); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "DecodeResult constructor not found"); return nullptr; }
-    jobject res = env->NewObject(cls, ctor, byteBuffer, width, height, duration, trim_left, trim_top, trim_width, trim_height);
-    env->DeleteLocalRef(cls);
+    if (cap < (jlong)size) { env->DeleteLocalRef(byteBuffer); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "ByteBuffer capacity mismatch"); return nullptr; }
+    try { frame.write(vips::VImage::new_from_memory(data, size, width, height, frame.bands(), frame.format())); } catch (const vips::VError& e) { env->DeleteLocalRef(byteBuffer); throw_vips_error(env, e); return nullptr; } catch (...) { env->DeleteLocalRef(byteBuffer); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Failed to write image bytes"); return nullptr; }
+
+    jclass resultCls = g_decodeResultCls;
+    jmethodID resultCtor = g_decodeResultCtor;
+    bool resultIsLocal = false;
+    if (resultCls == nullptr || resultCtor == nullptr) {
+      resultIsLocal = true;
+      resultCls = findClassChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeResult");
+      if (resultCls==nullptr) { env->DeleteLocalRef(byteBuffer); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "DecodeResult class not found"); return nullptr; }
+      resultCtor = env->GetMethodID(resultCls, "<init>", "(Ljava/nio/ByteBuffer;IIIIIII)V");
+      if (resultCtor==nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); env->DeleteLocalRef(resultCls); env->DeleteLocalRef(byteBuffer); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "DecodeResult constructor not found"); return nullptr; }
+    }
+    jobject res = env->NewObject(resultCls, resultCtor, byteBuffer, width, height, duration, trim_left, trim_top, trim_width, trim_height);
+    if (resultIsLocal) env->DeleteLocalRef(resultCls);
+    // KMK <-- The buffer is referenced by the result from here on.
     if (res==nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Failed to create DecodeResult"); return nullptr; }
     return res;
   } catch (const vips::VError& e) { throw_vips_error(env, e); return nullptr; } catch (...) { if (!env->ExceptionCheck()) throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Unknown decode error"); return nullptr; }
@@ -321,7 +527,7 @@ extern "C" JNIEXPORT jobject JNICALL Java_ca_mpreg_imagedecoder_ImageDecoder_dec
 
 extern "C" JNIEXPORT jobject JNICALL Java_ca_mpreg_imagedecoder_ImageDecoder_encode(JNIEnv* env, jobject obj, jstring jsuffix, jint page) {
   if (env==nullptr || obj==nullptr || jsuffix==nullptr) { throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Null argument"); return nullptr; }
-  jlong ptr = get_ptr(env, obj);
+  jlong ptr = get_ptr_cached(env, obj);
   Decoder* decoder = reinterpret_cast<Decoder*>(ptr);
   if (decoder==nullptr || decoder->buffer==nullptr) { throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Decoder closed"); return nullptr; }
   if (page < -1 || page >= decoder->pages) { throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Page index out of range"); return nullptr; }
@@ -337,12 +543,21 @@ extern "C" JNIEXPORT jobject JNICALL Java_ca_mpreg_imagedecoder_ImageDecoder_enc
     if (size > static_cast<size_t>(G_MAXINT)) { g_free(data); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Encoded size too large"); return nullptr; }
     jobject byteBuffer = env->NewDirectByteBuffer(data, (jlong)size);
     if (byteBuffer==nullptr || env->ExceptionCheck()) { g_free(data); if (env->ExceptionCheck()) env->ExceptionClear(); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Failed to allocate direct byte buffer"); return nullptr; }
-    jclass cls = findClassChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$EncodeResult");
-    if (cls==nullptr) { g_free(data); env->DeleteLocalRef(byteBuffer); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "EncodeResult class not found"); return nullptr; }
-    jmethodID ctor = env->GetMethodID(cls, "<init>", "(JLjava/nio/ByteBuffer;)V");
-    if (ctor==nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); g_free(data); env->DeleteLocalRef(byteBuffer); env->DeleteLocalRef(cls); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "EncodeResult constructor not found"); return nullptr; }
+    // KMK --> Cached constructor, original lookup as fallback.
+    ensure_cached_bindings(env);
+    bool resultIsLocal = false;
+    jclass cls = g_encodeResultCls;
+    jmethodID ctor = g_encodeResultCtor;
+    if (cls == nullptr || ctor == nullptr) {
+      resultIsLocal = true;
+      cls = findClassChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$EncodeResult");
+      if (cls==nullptr) { g_free(data); env->DeleteLocalRef(byteBuffer); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "EncodeResult class not found"); return nullptr; }
+      ctor = env->GetMethodID(cls, "<init>", "(JLjava/nio/ByteBuffer;)V");
+      if (ctor==nullptr || env->ExceptionCheck()) { if (env->ExceptionCheck()) env->ExceptionClear(); g_free(data); env->DeleteLocalRef(byteBuffer); env->DeleteLocalRef(cls); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "EncodeResult constructor not found"); return nullptr; }
+    }
     jobject res = env->NewObject(cls, ctor, (jlong)(intptr_t)data, byteBuffer);
-    env->DeleteLocalRef(cls);
+    if (resultIsLocal) env->DeleteLocalRef(cls);
+    // KMK <--
     if (res==nullptr || env->ExceptionCheck()) { g_free(data); if (env->ExceptionCheck()) env->ExceptionClear(); throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Failed to create EncodeResult"); return nullptr; }
     return res;
   } catch (const vips::VError& e) { env->ReleaseStringUTFChars(jsuffix, suffix); throw_vips_error(env, e); return nullptr; } catch (...) { env->ReleaseStringUTFChars(jsuffix, suffix); if (!env->ExceptionCheck()) throwNewChecked(env, "ca/mpreg/imagedecoder/ImageDecoder$DecodeException", "Unknown encode error"); return nullptr; }
@@ -350,7 +565,7 @@ extern "C" JNIEXPORT jobject JNICALL Java_ca_mpreg_imagedecoder_ImageDecoder_enc
 
 extern "C" JNIEXPORT void JNICALL Java_ca_mpreg_imagedecoder_ImageDecoder_00024EncodeResult_free(JNIEnv* env, jobject obj) {
   if (env==nullptr || obj==nullptr) return;
-  jlong ptr = take_ptr(env, obj);
+  jlong ptr = take_ptr_cached(env, obj);
   if (ptr==0) return;
   g_free((void*)(intptr_t)ptr);
 }

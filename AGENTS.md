@@ -17,7 +17,7 @@ Android library (`ca.mpreg.imagedecoder`) wrapping libvips via JNI — decodes j
 │   └── cpp/
 │       ├── CMakeLists.txt    # 1255-line native orchestrator (see cpp/AGENTS.md)
 │       ├── cmake/            # 18 per-dependency ExternalProject recipes
-│       ├── imagedecoder/     # imagedecoder.cpp (356-line JNI) + CMakeLists.txt
+│       ├── imagedecoder/     # imagedecoder.cpp (571-line JNI) + CMakeLists.txt
 │       └── patches/          # libvips-remove-subdirs.patch
 ├── sample/                   # Compose demo app (namespace ...imagedecoder.test)
 ├── tests/wsl/                # bash + cmake -P build-helper tests (see tests/wsl/AGENTS.md)
@@ -44,12 +44,12 @@ Excluded from map: `library/.cxx/`, `library/build/`, `.gradle/`, `.kotlin/` (ge
 
 | Symbol | Type | Location | Role |
 |--------|------|----------|------|
-| `ImageDecoder.new/getInfo` | Kotlin companion externals | `ImageDecoder.kt:170,174` | entry: construct from stream, probe info |
-| `ImageDecoder.decode/encode` | Kotlin externals | `ImageDecoder.kt:59,88` | per-page RGBA decode; re-encode via suffix |
-| `ImageDecoder.format/isSupportedFormat` | Kotlin mappings | `ImageDecoder.kt:21,181` | vips-loader → jpeg/png/webp/gif/tiff/heif/jxl/jp2 |
-| `JNI_OnLoad` | C++ JNI | `imagedecoder.cpp:42` | `VIPS_INIT`, concurrency=1, cache off |
-| `Java_..._ImageDecoder_new/getInfo/decode/encode` | C++ JNI exports | `imagedecoder.cpp:146,232,268,322` | buffer ingest (80 MB cap, 16384px cap) → vips → ByteBuffer |
-| `Decoder` / `decoder_new/free` | C++ struct | `imagedecoder.cpp:78,86,91` | owns `buffer`, `pages`, `durations` |
+| `ImageDecoder.new/newBytes/getInfo` | Kotlin companion externals | `ImageDecoder.kt:208,220,224` | entry: construct from stream / in-memory bytes (single copy), probe info |
+| `ImageDecoder.decode/encode` | Kotlin externals | `ImageDecoder.kt:60,89` | per-page RGBA decode; re-encode via suffix |
+| `ImageDecoder.format/isSupportedFormat` | Kotlin mappings | `ImageDecoder.kt:22,231` | vips-loader → jpeg/png/webp/gif/tiff/heif/jxl/jp2 |
+| `JNI_OnLoad` | C++ JNI | `imagedecoder.cpp:44` | `VIPS_INIT`, concurrency=1, cache off |
+| `Java_..._ImageDecoder_new/newBytes/getInfo/decode/encode` | C++ JNI exports | `imagedecoder.cpp:327,354,410,456,528` | buffer ingest (80 MB cap, 16384px cap) → vips → ByteBuffer |
+| `Decoder` / `decoder_new/free` | C++ struct | `imagedecoder.cpp:187,195,200` | owns `buffer`, `pages`, `durations` |
 | `to_msys_path` | CMake function | `cpp/CMakeLists.txt:139` | `C:/` → `/mnt/c/`; core of WSL strategy |
 | `EP_MESON_ARGS` / `EP_AUTOTOOLS_ARGS` | CMake vars | `cpp/CMakeLists.txt:568,764` | cross-file + prefix + static-only flags |
 | `ep_imagedecoder` | CMake/AGP target | `cpp/CMakeLists.txt:1246` | final `imagedecoder2` shared lib |
@@ -97,4 +97,14 @@ rm -rf library/.cxx .gradle/configuration-cache && ./gradlew --stop  # stale-cac
 - WSL `make`/`meson` probe `MISSING` warnings can be flaky; tools are installed — verify manually before acting.
 - `MainActivity.kt` opens `assets/anim-icos.gif`, but `sample` assets live at module root (`sample/assets/`) and the referenced file may be absent.
 - CI publishes to Maven Central on every `master` push and runs zero tests — don't assume green CI means tests passed.
+- `imagedecoder.cpp` caches its JNI bindings once per process under `std::call_once`
+  (`init_cached_bindings`: global class refs + ctor/field/method IDs). The block sits between
+  `JNI_OnLoad` and the `*_ptr_cached` helpers and **must stay above them** (declaration order was
+  a 16-undeclared-identifier build break once). Every accessor keeps the original per-call
+  lookup as its fallback and only takes a cached binding behind `IsInstanceOf`, so a fresh
+  classloader still resolves per call; a new cached binding belongs in `init_cached_bindings`,
+  not at a call site.
+- `ImageDecoder.newBytes(ByteArray)` ingests with a single `GetByteArrayElements` + `memcpy`
+  (80 MB guard); the copy is glib-owned from then on, so Kotlin may release its reference right
+  after the call. Stream-based `new()` keeps reading in 64 KiB chunks (`kReadChunkBytes`).
 - `BUILD.md` references `scripts/wsl-tests/run.ps1` — stale; real path is `tests/wsl/run.ps1` (parent repo has the wrapper).

@@ -17,7 +17,7 @@ cpp/
 │   └── cmake flavor:       # libwebp, zlib, libpng, libjpeg-turbo, libtiff, ...
 ├── imagedecoder/
 │   ├── CMakeLists.txt      # 30 lines: SHARED imagedecoder2, pkg-config vips-cpp, links dav1d + -static-libgcc/stdc++
-│   └── imagedecoder.cpp    # 356-line JNI: new/getInfo/decode/encode
+│   └── imagedecoder.cpp    # 571-line JNI: new/newBytes/getInfo/decode/encode
 └── patches/                # libvips-remove-subdirs.patch
 ```
 
@@ -30,7 +30,7 @@ cpp/
 | Windows→WSL path conversion | `to_msys_path` at `CMakeLists.txt:139` (`C:/` → `/mnt/c/`) |
 | Meson cross-file | generated `$build/android-cross-file.txt` (`CMakeLists.txt:1011`); consumed via `EP_MESON_ARGS` (`:568`, re-set `:1031`) |
 | Tool wrappers | `$build/wrappers/` (NDK `.exe` → WSL, fixes `Exec format error`); `meson_helper.sh` (`:1164`), `autotools_helper*.sh` (`:1056`) |
-| JNI decode path | `imagedecoder.cpp:268` (`Java_..._decode`); `new` `:146`, `getInfo` `:232`, `encode` `:322` |
+| JNI decode path | `imagedecoder.cpp:456` (`Java_..._decode`); `new` `:327`, `newBytes` `:354`, `getInfo` `:410`, `encode` `:528` |
 | Final JNI target | `ep_imagedecoder` at `CMakeLists.txt:1246` → inner `imagedecoder/CMakeLists.txt` |
 
 ## CONVENTIONS
