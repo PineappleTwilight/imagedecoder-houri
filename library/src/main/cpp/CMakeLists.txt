@@ -13,7 +13,10 @@ project("imagedecoder_s")
 # host cmake and all ExternalProjects (via EP_CMAKE_ARGS). Gracefully no-ops if
 # not installed. WSL on Windows also probes inside WSL (wsl which ccache).
 # ---------------------------------------------------------------------------
-if(NOT CMAKE_C_COMPILER_LAUNCHER AND NOT CMAKE_CXX_COMPILER_LAUNCHER)
+# NOTE: intentionally NOT guarded on CMAKE_<lang>_COMPILER_LAUNCHER being unset:
+# cached launcher entries from a previous configure would skip this block and
+# lose the meson cross-file / autotools ccache prefix on reconfigure.
+if(TRUE)
   find_program(CCACHE_PROGRAM ccache)
   if(NOT CCACHE_PROGRAM)
     find_program(CCACHE_PROGRAM sccache)
@@ -48,16 +51,48 @@ if(NOT CMAKE_C_COMPILER_LAUNCHER AND NOT CMAKE_CXX_COMPILER_LAUNCHER)
     set(CCACHE_PROGRAM "" CACHE STRING "" FORCE)
     set(_wsl_ccache_skipped TRUE)
   endif()
+  # Prefix for meson cross-file / autotools CC= values, whose drivers execute
+  # INSIDE WSL (meson_helper.sh / autotools_helper.sh), so a bare 'ccache'
+  # (resolved via WSL's PATH) is the right form there — never the host path.
+  # Windows-host cmake uses _wsl_ccache_skipped as proof that WSL has ccache
+  # (set only when `wsl which ccache` succeeded); Linux-host cmake runs inside
+  # WSL itself, so _host_ccache_enabled proves ccache exists for its children.
+  set(_ccache_prefix "")
+  if(IS_HOST_WINDOWS)
+    if(_wsl_ccache_skipped)
+      set(_ccache_prefix "ccache")
+      message(STATUS "Meson/autotools ExternalProjects will use WSL ccache (bare 'ccache' via cross-file/CC=)")
+    elseif(_host_ccache_enabled)
+      # Windows-side ccache short-circuited the WSL probe above; probe again so
+      # ExternalProjects that compile inside WSL still get the cache.
+      execute_process(COMMAND wsl which ccache OUTPUT_VARIABLE _wsl_ccache_host_cache_probe OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+      if(_wsl_ccache_host_cache_probe AND NOT _wsl_ccache_host_cache_probe MATCHES "not found")
+        set(_ccache_prefix "ccache")
+        message(STATUS "Meson/autotools ExternalProjects will use WSL ccache (bare 'ccache' via cross-file/CC=)")
+      endif()
+    endif()
+  elseif(_host_ccache_enabled)
+    set(_ccache_prefix "ccache")
+    message(STATUS "Meson/autotools ExternalProjects will use ccache via compiler prefix")
+  endif()
   if(_host_ccache_enabled)
     # Improve hit rate: ignore time macros, basedir, hash dir
     if(NOT DEFINED ENV{CCACHE_SLOPPINESS})
-      set(ENV{CCACHE_SLOPPINESS} "pch_defines,time_macros")
+      set(ENV{CCACHE_SLOPPINESS} "pch_defines,time_macros,file_macro,include_file_mtime,include_file_ctime,locale,envvars")
     endif()
     if(NOT DEFINED ENV{CCACHE_BASEDIR})
       set(ENV{CCACHE_BASEDIR} "${CMAKE_SOURCE_DIR}")
     endif()
     if(NOT DEFINED ENV{CCACHE_HASHDIR})
       set(ENV{CCACHE_HASHDIR} "false")
+    endif()
+    if(NOT DEFINED ENV{CCACHE_NOHASHDIR})
+      set(ENV{CCACHE_NOHASHDIR} "true")
+    endif()
+    # 4 ABIs x 2 build types x (Windows-host + WSL-host) rebuilds share this cache;
+    # 5 GiB default thrashes after a few full trees. 20 GiB keeps every ABI warm.
+    if(NOT DEFINED ENV{CCACHE_MAXSIZE})
+      set(ENV{CCACHE_MAXSIZE} "20G")
     endif()
   elseif(NOT _wsl_ccache_skipped)
     message(STATUS "ccache/sccache not found — native builds will not be cached (install: sudo apt install ccache / cargo install sccache, Windows: choco install ccache + wsl sudo apt install ccache)")
@@ -725,7 +760,7 @@ message(STATUS "WSL PREFIX: ${THIRD_PARTY_LIB_PATH} -> ${EP_AUTOTOOLS_PREFIX}")
 # listed in WSLENV. libffi's config.log showed CCAS='gcc' (host) because
 # CC/CCAS never arrived in WSL. Forward all autotools/meson env vars.
 # No /p flag - CC is already Linux /usr/... path when _use_linux_ndk, not Windows.
-set(WSL_ENV_FORWARD "CC:CCAS:CFLAGS:CCASFLAGS:CXX:CXXFLAGS:AR:LD:RANLIB:STRIP:PKG_CONFIG_PATH:PKG_CONFIG_LIBDIR:gl_cv_func_nl_langinfo_codeset:am_cv_langinfo_codeset")
+set(WSL_ENV_FORWARD "CC:CCAS:CFLAGS:CCASFLAGS:CXX:CXXFLAGS:AR:LD:RANLIB:STRIP:PKG_CONFIG_PATH:PKG_CONFIG_LIBDIR:gl_cv_func_nl_langinfo_codeset:am_cv_langinfo_codeset:CCACHE_SLOPPINESS:CCACHE_MAXSIZE:CCACHE_NOHASHDIR:CCACHE_HASHDIR:CCACHE_BASEDIR/p")
 
 # When using Linux NDK, autotools should also use the Linux tools (native ELF, not Windows PE)
 # because inside WSL's bash, the Windows clang.exe cannot handle /tmp files and --target correctly for aarch64.
@@ -756,6 +791,12 @@ else()
   set(_autotools_ranlib "${_ranlib_msys}")
   set(_autotools_strip "${_strip_msys}")
   set(_autotools_as "${_as_msys}")
+endif()
+# ccache for autotools ExternalProjects (libffi, lcms2, libiconv): CC/CXX reach
+# make inside WSL via WSLENV, and "ccache <clang>" is the documented ccache form.
+if(_ccache_prefix)
+  set(_autotools_cc "${_ccache_prefix} ${_autotools_cc}")
+  set(_autotools_cxx "${_ccache_prefix} ${_autotools_cxx}")
 endif()
 # AS is empty for Android (clang handles asm); omit it entirely to avoid
 # 'invalid variable name' errors from autotools when passed as AS= with empty
@@ -971,6 +1012,16 @@ set(_extra_c_args "")
 if(_use_linux_ndk)
   set(_extra_c_args "', '-I${_cross_inc}/openjpeg-2.5")
 endif()
+# ccache prefix for the meson cross-file compiler entries: with a prefix element
+# present, meson invokes `ccache <clang> --target=...` for every compilation of
+# the meson-flavored ExternalProjects (glib, libvips, dav1d, libde265, highway,
+# etc.). The drivers run inside WSL, so the bare 'ccache' resolves via WSL PATH.
+set(_ccache_c_elem "")
+set(_ccache_cpp_elem "")
+if(_ccache_prefix)
+  set(_ccache_c_elem "'${_ccache_prefix}', ")
+  set(_ccache_cpp_elem "'${_ccache_prefix}', ")
+endif()
 set(CROSS_FILE_CONTENT "
 [host_machine]
 system = 'android'
@@ -979,8 +1030,8 @@ cpu = '${ANDROID_CPU}'
 endian = '${ANDROID_CPU_ENDIANESS}'
 
 [binaries]
-c = ['${_cross_c}', '--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}']
-cpp = ['${_cross_cpp}', '--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}']
+c = [${_ccache_c_elem}'${_cross_c}', '--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}']
+cpp = [${_ccache_cpp_elem}'${_cross_cpp}', '--target=${ANDROID_TARGET}${ANDROID_PLATFORM_LEVEL}']
 ar = '${_cross_ar}'
 ld = '${_cross_ld}'
 strip = '${_cross_strip}'
