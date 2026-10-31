@@ -8,6 +8,8 @@ ExternalProject_Add(ep_libjxl
     CMAKE_ARGS
         ${EP_CMAKE_ARGS}
         -DJPEGXL_ENABLE_TOOLS=false
+        -DJPEGXL_ENABLE_DEVTOOLS=false
+        -DJPEGXL_ENABLE_VIEWERS=false
         -DJPEGXL_ENABLE_DOXYGEN=false
         -DJPEGXL_ENABLE_MANPAGES=false
         -DJPEGXL_ENABLE_BENCHMARK=false

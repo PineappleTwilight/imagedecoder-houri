@@ -9,6 +9,6 @@ ExternalProject_Add(ep_highway
         -DHWY_ENABLE_CONTRIB=OFF
         -DHWY_ENABLE_EXAMPLES=OFF
         -DHWY_ENABLE_TESTS=OFF
-        -DHWY_SYSTEM_GTEST=ON
+        -DHWY_SYSTEM_GTEST=OFF
         -DHWY_FORCE_STATIC_LIBS=ON
 )

@@ -19,7 +19,7 @@ ExternalProject_Add(ep_dav1d
     GIT_REPOSITORY https://code.videolan.org/videolan/dav1d
     GIT_TAG 1.5.4
     GIT_SHALLOW TRUE
-    CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env "MSYS_NO_PATHCONV=1" "NINJA=${Ninja_EXECUTABLE}" ${_dav1d_meson_cmd} setup ${EP_MESON_ARGS} <BINARY_DIR> <SOURCE_DIR>
+    CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env "MSYS_NO_PATHCONV=1" "NINJA=${Ninja_EXECUTABLE}" ${_dav1d_meson_cmd} setup ${EP_MESON_ARGS} -Denable_tools=false -Denable_tests=false <BINARY_DIR> <SOURCE_DIR>
     BUILD_COMMAND ${_dav1d_meson_cmd} compile -j ${NPROC} -C <BINARY_DIR>
     INSTALL_COMMAND ${_dav1d_meson_cmd} install -C <BINARY_DIR>
 )
